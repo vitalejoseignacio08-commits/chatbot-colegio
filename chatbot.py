@@ -3,6 +3,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 import os
 import io
 import requests
@@ -26,6 +27,7 @@ def get_drive_service():
         client_secret=client_secret,
         token_uri="https://oauth2.googleapis.com/token"
     )
+    creds.refresh(Request())
     return build("drive", "v3", credentials=creds)
 
 def subir_a_drive(url_archivo, nombre_archivo, mimetype):
