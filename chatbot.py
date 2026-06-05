@@ -33,7 +33,9 @@ def get_drive_service():
 def subir_a_drive(url_archivo, nombre_archivo, mimetype):
     try:
         service = get_drive_service()
-        response = requests.get(url_archivo)
+        account_sid = os.environ.get("TWILIO_ACCOUNT_SID")
+        auth_token = os.environ.get("TWILIO_AUTH_TOKEN")
+        response = requests.get(url_archivo, auth=(account_sid, auth_token))
         file_stream = io.BytesIO(response.content)
         media = MediaIoBaseUpload(file_stream, mimetype=mimetype)
         file_metadata = {"name": nombre_archivo, "parents": [DRIVE_FOLDER_ID]}
