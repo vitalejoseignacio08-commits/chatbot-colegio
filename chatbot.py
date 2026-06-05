@@ -52,11 +52,12 @@ def subir_a_drive(url_archivo, nombre_archivo, mimetype):
         print(f"Error subiendo a Drive: {e}")
         return False
 
-def agendar_cita(nombre, fecha_str, motivo, numero):
+def agendar_cita(nombre, fecha_str, motivo, numero, hora_str="09:00"):
     try:
         service = get_calendar_service()
         fecha = datetime.strptime(fecha_str, "%d/%m/%Y")
-        inicio = fecha.replace(hour=9, minute=0)
+        hora = datetime.strptime(hora_str, "%H:%M").time()
+        inicio = fecha.replace(hour=hora.hour, minute=hora.minute)
         fin = inicio + timedelta(hours=1)
         evento = {
             "summary": f"Consulta: {nombre}",
@@ -94,19 +95,30 @@ def responder(mensaje, numero):
     if estado.get("paso") == "fecha":
         try:
             datetime.strptime(mensaje.strip(), "%d/%m/%Y")
-            conversaciones[numero] = {"paso": "motivo", "nombre": estado["nombre"], "fecha": mensaje.strip()}
-            return "📝 ¿Cuál es el motivo de la consulta?"
+            conversaciones[numero] = {"paso": "hora", "nombre": estado["nombre"], "fecha": mensaje.strip()}
+            return "🕐 ¿A qué hora preferís la consulta? El horario disponible es de *7:30 a 13:00hs*. Escribila así: *HH:MM* (ejemplo: 09:00)"
         except:
             return "❌ Formato de fecha incorrecto. Escribila así: *DD/MM/AAAA* (ejemplo: 15/06/2026)"
+
+    if estado.get("paso") == "hora":
+        try:
+            hora = datetime.strptime(mensaje.strip(), "%H:%M").time()
+            if hora < datetime.strptime("07:30", "%H:%M").time() or hora > datetime.strptime("13:00", "%H:%M").time():
+                return "❌ El horario debe ser entre las *7:30 y las 13:00hs*. Intentá de nuevo."
+            conversaciones[numero] = {"paso": "motivo", "nombre": estado["nombre"], "fecha": estado["fecha"], "hora": mensaje.strip()}
+            return "📝 ¿Cuál es el motivo de la consulta?"
+        except:
+            return "❌ Formato de hora incorrecto. Escribila así: *HH:MM* (ejemplo: 09:00)"
 
     if estado.get("paso") == "motivo":
         nombre = estado["nombre"]
         fecha = estado["fecha"]
+        hora = estado["hora"]
         motivo = mensaje.strip()
         conversaciones.pop(numero, None)
-        exito = agendar_cita(nombre, fecha, motivo, numero)
+        exito = agendar_cita(nombre, fecha, motivo, numero, hora)
         if exito:
-            return f"✅ ¡Consulta agendada!\n\n*Nombre:* {nombre}\n*Fecha:* {fecha}\n*Motivo:* {motivo}\n\nTe esperamos a las 9:00hs."
+            return f"✅ ¡Consulta agendada!\n\n*Nombre:* {nombre}\n*Fecha:* {fecha}\n*Hora:* {hora}hs\n*Motivo:* {motivo}"
         else:
             return "❌ Hubo un error al agendar. Intentá de nuevo o contactá a preceptoría directamente."
 
