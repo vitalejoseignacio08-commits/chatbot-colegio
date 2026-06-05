@@ -67,7 +67,7 @@ def responder(mensaje):
     elif msg == "2":
         return "📋 Para inscripción necesitás:\n- DNI\n- Constancia de estudios\n- Partida de nacimiento\n\nPresentate en secretaría de lunes a viernes de 8:00 a 12:00hs."
     elif msg == "3":
-        return "📎 Enviá el documento directamente por este chat (PDF o imagen) y lo recibiremos automáticamente."
+        return "📎 Enviá el documento en formato *PDF* directamente por este chat y lo recibiremos automáticamente. No se aceptan archivos Word ni Excel."
     elif msg == "4":
         return "📅 Para agendar una consulta, decinos tu nombre, curso y el motivo y te contactaremos a la brevedad."
     elif msg == "5":
