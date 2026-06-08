@@ -1,5 +1,4 @@
-from flask import Flask, request
-from twilio.twiml.messaging_response import MessagingResponse
+from flask import Flask, request, jsonify
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 from google.oauth2.credentials import Credentials
@@ -13,6 +12,11 @@ app = Flask(__name__)
 
 # Google config
 DRIVE_FOLDER_ID = "1_o3PbEP9KOaJ4kN-0eu3j3JyKUgG0vSj"
+
+# Meta config
+PHONE_NUMBER_ID = os.environ.get("META_PHONE_NUMBER_ID", "1201535816372087")
+META_TOKEN = os.environ.get("META_ACCESS_TOKEN")
+VERIFY_TOKEN = os.environ.get("META_VERIFY_TOKEN", "colegio_agrotecnico_bot")
 
 # Estado de conversación para agendar citas
 conversaciones = {}
@@ -37,13 +41,33 @@ def get_drive_service():
 def get_calendar_service():
     return build("calendar", "v3", credentials=get_credentials())
 
-def subir_a_drive(url_archivo, nombre_archivo, mimetype):
+def enviar_mensaje(numero, texto):
+    url = f"https://graph.facebook.com/v25.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {META_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "messaging_product": "whatsapp",
+        "to": numero,
+        "type": "text",
+        "text": {"body": texto}
+    }
+    requests.post(url, headers=headers, json=data)
+
+def descargar_media_meta(media_id):
+    url = f"https://graph.facebook.com/v25.0/{media_id}"
+    headers = {"Authorization": f"Bearer {META_TOKEN}"}
+    response = requests.get(url, headers=headers).json()
+    media_url = response.get("url")
+    mime_type = response.get("mime_type", "application/octet-stream")
+    media_content = requests.get(media_url, headers=headers).content
+    return media_content, mime_type
+
+def subir_a_drive(contenido, nombre_archivo, mimetype):
     try:
         service = get_drive_service()
-        account_sid = os.environ.get("TWILIO_ACCOUNT_SID")
-        auth_token = os.environ.get("TWILIO_AUTH_TOKEN")
-        response = requests.get(url_archivo, auth=(account_sid, auth_token))
-        file_stream = io.BytesIO(response.content)
+        file_stream = io.BytesIO(contenido)
         media = MediaIoBaseUpload(file_stream, mimetype=mimetype)
         file_metadata = {"name": nombre_archivo, "parents": [DRIVE_FOLDER_ID]}
         service.files().create(body=file_metadata, media_body=media).execute()
@@ -139,28 +163,51 @@ def responder(mensaje, numero):
     else:
         return MENU
 
+@app.route("/webhook", methods=["GET"])
+def verificar_webhook():
+    mode = request.args.get("hub.mode")
+    token = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
+    if mode == "subscribe" and token == VERIFY_TOKEN:
+        return challenge, 200
+    return "Forbidden", 403
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    mensaje = request.form.get("Body", "")
-    numero = request.form.get("From", "")
-    num_media = int(request.form.get("NumMedia", 0))
-    respuesta = MessagingResponse()
-    msg = respuesta.message()
+    data = request.get_json()
+    try:
+        entry = data["entry"][0]
+        changes = entry["changes"][0]
+        value = changes["value"]
 
-    if num_media > 0:
-        media_url = request.form.get("MediaUrl0")
-        media_type = request.form.get("MediaContentType0", "application/octet-stream")
-        extension = media_type.split("/")[-1]
-        nombre = f"documento_{numero.replace('+', '')}.{extension}"
-        exito = subir_a_drive(media_url, nombre, media_type)
-        if exito:
-            msg.body("✅ ¡Documento recibido y guardado correctamente!")
-        else:
-            msg.body("❌ Hubo un error al guardar el documento. Intentá de nuevo.")
-    else:
-        msg.body(responder(mensaje, numero))
+        if "messages" not in value:
+            return "OK", 200
 
-    return str(respuesta)
+        message = value["messages"][0]
+        numero = message["from"]
+        tipo = message.get("type")
+
+        if tipo == "text":
+            texto = message["text"]["body"]
+            respuesta = responder(texto, numero)
+            enviar_mensaje(numero, respuesta)
+
+        elif tipo in ["document", "image"]:
+            media_id = message[tipo]["id"]
+            mime_type = message[tipo].get("mime_type", "application/octet-stream")
+            extension = mime_type.split("/")[-1]
+            nombre = f"documento_{numero}.{extension}"
+            contenido, mime = descargar_media_meta(media_id)
+            exito = subir_a_drive(contenido, nombre, mime)
+            if exito:
+                enviar_mensaje(numero, "✅ ¡Documento recibido y guardado correctamente!")
+            else:
+                enviar_mensaje(numero, "❌ Hubo un error al guardar el documento. Intentá de nuevo.")
+
+    except Exception as e:
+        print(f"Error procesando mensaje: {e}")
+
+    return "OK", 200
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
