@@ -174,7 +174,9 @@ def verificar_webhook():
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
+    print("=== MENSAJE RECIBIDO ===")
     data = request.get_json()
+    print(f"Data: {data}")
     try:
         entry = data["entry"][0]
         changes = entry["changes"][0]
