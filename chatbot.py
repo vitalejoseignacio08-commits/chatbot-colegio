@@ -53,7 +53,8 @@ def enviar_mensaje(numero, texto):
         "type": "text",
         "text": {"body": texto}
     }
-    requests.post(url, headers=headers, json=data)
+    r = requests.post(url, headers=headers, json=data)
+    print(f"Respuesta Meta: {r.status_code} - {r.text}")
 
 def descargar_media_meta(media_id):
     url = f"https://graph.facebook.com/v25.0/{media_id}"
