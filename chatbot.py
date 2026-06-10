@@ -201,15 +201,17 @@ def verificar_disponibilidad(fecha_str, hora_str):
 def verificar_recordatorios():
     try:
         service = get_calendar_service()
-        ahora = datetime.now()
+        ahora = datetime.utcnow()
         ventana_inicio = ahora + timedelta(minutes=28)
         ventana_fin = ahora + timedelta(minutes=32)
+        print(f"[Scheduler] Corriendo a {ahora.isoformat()}Z — ventana {ventana_inicio.strftime('%H:%M')} a {ventana_fin.strftime('%H:%M')} UTC")
         eventos = service.events().list(
             calendarId="primary",
-            timeMin=ventana_inicio.isoformat() + "-03:00",
-            timeMax=ventana_fin.isoformat() + "-03:00",
+            timeMin=ventana_inicio.isoformat() + "Z",
+            timeMax=ventana_fin.isoformat() + "Z",
             singleEvents=True
         ).execute().get("items", [])
+        print(f"[Scheduler] Eventos encontrados: {len(eventos)}")
         for evento in eventos:
             evento_id = evento.get("id")
             if evento_id in eventos_notificados:
