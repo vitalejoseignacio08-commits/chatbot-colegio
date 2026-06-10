@@ -3,6 +3,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
+from apscheduler.schedulers.background import BackgroundScheduler
 import os
 import io
 import requests
@@ -16,7 +17,10 @@ META_TOKEN = os.environ.get("META_ACCESS_TOKEN")
 VERIFY_TOKEN = os.environ.get("META_VERIFY_TOKEN", "colegio_agrotecnico_bot")
 conversaciones = {}
 NUMERO_GUARDIA = "+5493467415772"
+NUMERO_GUARDIA_MONTE_BUEY = "+5493467415772"
+NUMERO_GUARDIA_POSSE = "+5493467434284"
 HORARIO_ATENCION = "lunes a viernes de 10:00 a 20:00hs"
+eventos_notificados = set()
 
 def get_credentials():
     refresh_token = "1//" + os.environ.get("GOOGLE_REFRESH_TOKEN", "")
@@ -193,6 +197,45 @@ def verificar_disponibilidad(fecha_str, hora_str):
     except Exception as e:
         print(f"Error verificando disponibilidad: {e}")
         return True, []
+
+def verificar_recordatorios():
+    try:
+        service = get_calendar_service()
+        ahora = datetime.now()
+        ventana_inicio = ahora + timedelta(minutes=28)
+        ventana_fin = ahora + timedelta(minutes=32)
+        eventos = service.events().list(
+            calendarId="primary",
+            timeMin=ventana_inicio.isoformat() + "-03:00",
+            timeMax=ventana_fin.isoformat() + "-03:00",
+            singleEvents=True
+        ).execute().get("items", [])
+        for evento in eventos:
+            evento_id = evento.get("id")
+            if evento_id in eventos_notificados:
+                continue
+            titulo = evento.get("summary", "Consulta")
+            descripcion = evento.get("description", "")
+            inicio_str = evento["start"].get("dateTime", "")
+            hora_evento = datetime.fromisoformat(inicio_str.replace("-03:00", "")).strftime("%H:%M")
+            # Leer sucursal de la descripción
+            sucursal = "Monte Buey"
+            for linea in descripcion.splitlines():
+                if linea.startswith("Sucursal:"):
+                    sucursal = linea.replace("Sucursal:", "").strip()
+                    break
+            numero_destino = NUMERO_GUARDIA_POSSE if "Posse" in sucursal or "posse" in sucursal else NUMERO_GUARDIA_MONTE_BUEY
+            nombre_cliente = titulo.replace("Consulta Gen Viajero: ", "")
+            mensaje = (f"🔔 *Recordatorio Gen Viajero*\n\n"
+                       f"Tenés una consulta en *30 minutos*\n"
+                       f"👤 {nombre_cliente}\n"
+                       f"🕐 {hora_evento}hs\n"
+                       f"📍 {sucursal}")
+            enviar_mensaje(numero_destino, mensaje)
+            eventos_notificados.add(evento_id)
+            print(f"Recordatorio enviado a {numero_destino} para evento {evento_id}")
+    except Exception as e:
+        print(f"Error en verificar_recordatorios: {e}")
 
 def agendar_cita(nombre, fecha_str, motivo, telefono, sucursal, hora_str="10:00", email=""):
     try:
@@ -518,6 +561,10 @@ def webhook():
     except Exception as e:
         print(f"Error procesando mensaje: {e}")
     return "OK", 200
+
+scheduler = BackgroundScheduler()
+scheduler.add_job(verificar_recordatorios, "interval", minutes=5)
+scheduler.start()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
