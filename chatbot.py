@@ -58,16 +58,33 @@ def formatear_numero(numero):
         return f"+54 9 {area} {p1}-{p2}"
     return numero
 
+def buscar_carpeta_existente(numero_ws):
+    """Devuelve el ID de la carpeta si ya existe para este número, o None."""
+    try:
+        service = get_drive_service()
+        numero_fmt = formatear_numero(numero_ws)
+        query = f"name contains '{numero_fmt}' and mimeType='application/vnd.google-apps.folder' and '{DRIVE_FOLDER_ID}' in parents and trashed=false"
+        results = service.files().list(q=query, fields="files(id, name)").execute()
+        carpetas = results.get("files", [])
+        if carpetas:
+            return carpetas[0]["id"]
+        return None
+    except Exception as e:
+        print(f"Error buscando carpeta: {e}")
+        return None
+
 def obtener_o_crear_carpeta(nombre_cliente, numero_ws):
     try:
         service = get_drive_service()
         numero_fmt = formatear_numero(numero_ws)
-        nombre_carpeta = f"{nombre_cliente} ({numero_fmt})"
-        query = f"name='{nombre_carpeta}' and mimeType='application/vnd.google-apps.folder' and '{DRIVE_FOLDER_ID}' in parents and trashed=false"
-        results = service.files().list(q=query, fields="files(id)").execute()
+        # Buscar por número (único e inmutable), ignorar el nombre
+        query = f"name contains '{numero_fmt}' and mimeType='application/vnd.google-apps.folder' and '{DRIVE_FOLDER_ID}' in parents and trashed=false"
+        results = service.files().list(q=query, fields="files(id, name)").execute()
         carpetas = results.get("files", [])
         if carpetas:
-            return carpetas[0]["id"], nombre_carpeta
+            return carpetas[0]["id"], carpetas[0]["name"]
+        # Si no existe, crear con nombre + número
+        nombre_carpeta = f"{nombre_cliente} ({numero_fmt})"
         carpeta = service.files().create(body={
             "name": nombre_carpeta,
             "mimeType": "application/vnd.google-apps.folder",
@@ -356,8 +373,16 @@ def responder(mensaje, numero):
 
     if estado.get("paso") == "doc_menu":
         if mensaje.strip() == "1":
-            conversaciones[numero] = {**estado, "paso": "doc_nombre"}
-            return "👤 ¿Cuál es tu nombre y apellido completo?"
+            carpeta_id = buscar_carpeta_existente(numero)
+            if carpeta_id:
+                conversaciones[numero] = {**estado, "paso": "doc_tipo", "nombre_cliente": ""}
+                return ("📄 ¿Qué tipo de documento vas a enviar?\n\n"
+                        "1️⃣ Pasaporte\n"
+                        "2️⃣ Visa\n"
+                        "3️⃣ DNI")
+            else:
+                conversaciones[numero] = {**estado, "paso": "doc_nombre"}
+                return "👤 ¿Cuál es tu nombre y apellido completo?"
         elif mensaje.strip() == "2":
             conteos = listar_documentos(numero)
             conversaciones.pop(numero, None)
@@ -401,7 +426,12 @@ def responder(mensaje, numero):
             conversaciones.pop(numero, None)
             return MENU
         elif mensaje.strip() == "2":
-            conversaciones[numero] = {**estado, "paso": "doc_tipo"}
+            carpeta_id = buscar_carpeta_existente(numero)
+            if carpeta_id:
+                conversaciones[numero] = {**estado, "paso": "doc_tipo", "nombre_cliente": ""}
+            else:
+                conversaciones[numero] = {**estado, "paso": "doc_nombre"}
+                return "👤 ¿Cuál es tu nombre y apellido completo?"
             return ("📄 ¿Qué tipo de documento vas a enviar?\n\n"
                     "1️⃣ Pasaporte\n"
                     "2️⃣ Visa\n"
