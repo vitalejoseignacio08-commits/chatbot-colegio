@@ -396,6 +396,24 @@ def responder(mensaje, numero):
         conversaciones[numero] = {**estado, "paso": "doc_esperar", "tipo_doc": tipo}
         return f"📎 Perfecto. Ahora enviá tu *{tipo}* y lo guardamos en tu carpeta personal 🔒"
 
+    if estado.get("paso") == "doc_post":
+        if mensaje.strip() == "1":
+            conversaciones.pop(numero, None)
+            return MENU
+        elif mensaje.strip() == "2":
+            conversaciones[numero] = {**estado, "paso": "doc_tipo"}
+            return ("📄 ¿Qué tipo de documento vas a enviar?\n\n"
+                    "1️⃣ Pasaporte\n"
+                    "2️⃣ Visa\n"
+                    "3️⃣ DNI")
+        elif mensaje.strip() == "3":
+            conversaciones.pop(numero, None)
+            return ("¡Fue un placer ayudarte! 😊✈️\n\n"
+                    "Recordá que *Atlas* está disponible las 24hs para lo que necesites.\n"
+                    "¡Hasta la próxima aventura! 🌍")
+        else:
+            return "Por favor respondé *1*, *2* o *3*."
+
     if msg in ["hola", "buenas", "buenos dias", "buenas tardes", "buenas noches", "inicio", "menu", "menú", "start"]:
         return MENU
     elif msg == "2":
@@ -455,10 +473,15 @@ def webhook():
                 media_id = message[tipo]["id"]
                 contenido, mime = descargar_media_meta(media_id)
                 exito, nombre_guardado = subir_a_drive(contenido, tipo_doc, mime, nombre_cliente, numero)
-                conversaciones.pop(numero, None)
                 if exito:
-                    enviar_mensaje(numero, f"✅ *{nombre_guardado}* guardado correctamente en tu carpeta personal 🔒")
+                    conversaciones[numero] = {**estado, "paso": "doc_post"}
+                    enviar_mensaje(numero, (f"✅ *{nombre_guardado}* guardado correctamente en tu carpeta personal 🔒\n\n"
+                                           f"¿Qué querés hacer ahora?\n\n"
+                                           f"1️⃣ Volver al menú principal\n"
+                                           f"2️⃣ Enviar otro documento\n"
+                                           f"3️⃣ Terminar conversación"))
                 else:
+                    conversaciones.pop(numero, None)
                     enviar_mensaje(numero, "❌ Hubo un error al guardar el documento. Intentá de nuevo.")
             else:
                 enviar_mensaje(numero, "👤 Para enviar documentación usá la opción *4* del menú primero, así lo guardamos en tu carpeta personal.")
