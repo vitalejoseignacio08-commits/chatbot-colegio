@@ -147,11 +147,22 @@ def responder(mensaje, numero):
 
     if estado.get("paso") == "cita_nombre":
         conversaciones[numero] = {**estado, "paso": "cita_telefono", "nombre": mensaje.strip()}
-        return "📱 ¿Cuál es tu número de teléfono de contacto?"
+        return "📱 ¿Cuál es tu número de WhatsApp?\nEscribilo así: *3467123456* (sin el +54 9 adelante)"
 
     if estado.get("paso") == "cita_telefono":
-        conversaciones[numero] = {**estado, "paso": "cita_fecha", "telefono": mensaje.strip()}
-        return "📅 ¿Qué fecha preferís? Escribila así: *DD/MM/AAAA*"
+        tel = mensaje.strip().replace(" ", "").replace("-", "")
+        intentos = estado.get("intentos_tel", 0)
+        if tel.isdigit() and len(tel) == 10:
+            tel_formateado = f"+54 9 {tel[:4]} {tel[4:6]}-{tel[6:]}"
+            conversaciones[numero] = {**estado, "paso": "cita_fecha", "telefono": tel_formateado}
+            return "📅 ¿Qué fecha preferís? Escribila así: *DD/MM/AAAA*"
+        else:
+            intentos += 1
+            if intentos >= 3:
+                conversaciones.pop(numero, None)
+                return "❌ No pudimos registrar tu número. Escribí *menú* para empezar de nuevo o contactanos directamente."
+            conversaciones[numero] = {**estado, "paso": "cita_telefono", "intentos_tel": intentos}
+            return f"❌ Ese número no es válido. Recordá: sin el +54 9, solo los 10 números.\nEjemplo: *3467123456* — Te quedan *{3 - intentos} intentos*."
 
     if estado.get("paso") == "cita_fecha":
         try:
