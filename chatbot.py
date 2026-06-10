@@ -562,9 +562,11 @@ def webhook():
         print(f"Error procesando mensaje: {e}")
     return "OK", 200
 
+import atexit
 scheduler = BackgroundScheduler()
 scheduler.add_job(verificar_recordatorios, "interval", minutes=5)
 scheduler.start()
+atexit.register(lambda: scheduler.shutdown())
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
