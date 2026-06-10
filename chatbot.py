@@ -155,7 +155,7 @@ def responder(mensaje, numero):
         if tel.isdigit() and len(tel) == 10:
             tel_formateado = f"+54 9 {tel[:4]} {tel[4:6]}-{tel[6:]}"
             conversaciones[numero] = {**estado, "paso": "cita_fecha", "telefono": tel_formateado}
-            return "📅 ¿Qué fecha preferís? Escribila así: *DD/MM/AAAA*"
+            return "📅 ¿Qué fecha preferís?\nEscribila así: *DD/MM/AAAA* — de lunes a viernes, hasta 15 días adelante."
         else:
             intentos += 1
             if intentos >= 3:
@@ -165,12 +165,41 @@ def responder(mensaje, numero):
             return f"❌ Ese número no es válido. Recordá: sin el +54 9, solo los 10 números.\nEjemplo: *3467123456* — Te quedan *{3 - intentos} intentos*."
 
     if estado.get("paso") == "cita_fecha":
+        intentos = estado.get("intentos_fecha", 0)
+        hoy = datetime.now().date()
+        fecha_max = hoy + timedelta(days=15)
         try:
-            datetime.strptime(mensaje.strip(), "%d/%m/%Y")
+            fecha = datetime.strptime(mensaje.strip(), "%d/%m/%Y").date()
+            if fecha < hoy:
+                intentos += 1
+                if intentos >= 3:
+                    conversaciones.pop(numero, None)
+                    return "❌ Demasiados intentos. Escribí *menú* para empezar de nuevo."
+                conversaciones[numero] = {**estado, "paso": "cita_fecha", "intentos_fecha": intentos}
+                return f"❌ Esa fecha ya pasó. Elegí una fecha desde hoy hasta el *{fecha_max.strftime('%d/%m/%Y')}* — Te quedan *{3 - intentos} intentos*."
+            if fecha > fecha_max:
+                intentos += 1
+                if intentos >= 3:
+                    conversaciones.pop(numero, None)
+                    return "❌ Demasiados intentos. Escribí *menú* para empezar de nuevo."
+                conversaciones[numero] = {**estado, "paso": "cita_fecha", "intentos_fecha": intentos}
+                return f"❌ Solo podés agendar hasta 15 días adelante. La fecha máxima es *{fecha_max.strftime('%d/%m/%Y')}* — Te quedan *{3 - intentos} intentos*."
+            if fecha.weekday() >= 5:
+                intentos += 1
+                if intentos >= 3:
+                    conversaciones.pop(numero, None)
+                    return "❌ Demasiados intentos. Escribí *menú* para empezar de nuevo."
+                conversaciones[numero] = {**estado, "paso": "cita_fecha", "intentos_fecha": intentos}
+                return f"❌ Esa fecha es fin de semana. Elegí un día de lunes a viernes — Te quedan *{3 - intentos} intentos*."
             conversaciones[numero] = {**estado, "paso": "cita_hora", "fecha": mensaje.strip()}
             return "🕐 ¿A qué hora preferís? El horario es de *10:00 a 20:00hs*. Escribila así: *HH:MM* (ejemplo: 14:00)"
-        except:
-            return "❌ Formato de fecha incorrecto. Escribila así: *DD/MM/AAAA* (ejemplo: 15/06/2026)"
+        except ValueError:
+            intentos += 1
+            if intentos >= 3:
+                conversaciones.pop(numero, None)
+                return "❌ Demasiados intentos. Escribí *menú* para empezar de nuevo."
+            conversaciones[numero] = {**estado, "paso": "cita_fecha", "intentos_fecha": intentos}
+            return f"❌ Esa fecha no existe. Escribila así: *DD/MM/AAAA* — Ejemplo: *15/06/XXXX* — Te quedan *{3 - intentos} intentos*."
 
     if estado.get("paso") == "cita_hora":
         try:
