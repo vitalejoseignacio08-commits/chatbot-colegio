@@ -68,36 +68,67 @@ def descargar_media_meta(media_id):
     media_content = requests.get(media_url, headers=headers).content
     return media_content, mime_type
 
-def obtener_o_crear_carpeta(nombre_cliente):
+def formatear_numero(numero):
+    # numero llega como "5493467123456" → "+54 9 3467 12-3456"
+    n = numero.lstrip("+")
+    if n.startswith("54") and len(n) == 13:
+        area = n[3:7]
+        p1 = n[7:9]
+        p2 = n[9:]
+        return f"+54 9 {area} {p1}-{p2}"
+    return numero
+
+def obtener_o_crear_carpeta(nombre_cliente, numero_ws):
     try:
         service = get_drive_service()
-        query = f"name='{nombre_cliente}' and mimeType='application/vnd.google-apps.folder' and '{DRIVE_FOLDER_ID}' in parents and trashed=false"
+        numero_fmt = formatear_numero(numero_ws)
+        nombre_carpeta = f"{nombre_cliente} ({numero_fmt})"
+        # Buscar por número exacto en el nombre (único e inmutable)
+        query = f"name='{nombre_carpeta}' and mimeType='application/vnd.google-apps.folder' and '{DRIVE_FOLDER_ID}' in parents and trashed=false"
         results = service.files().list(q=query, fields="files(id)").execute()
         carpetas = results.get("files", [])
         if carpetas:
-            return carpetas[0]["id"]
+            return carpetas[0]["id"], nombre_carpeta
         carpeta = service.files().create(body={
-            "name": nombre_cliente,
+            "name": nombre_carpeta,
             "mimeType": "application/vnd.google-apps.folder",
             "parents": [DRIVE_FOLDER_ID]
         }).execute()
-        return carpeta["id"]
+        return carpeta["id"], nombre_carpeta
     except Exception as e:
         print(f"Error creando carpeta: {e}")
-        return DRIVE_FOLDER_ID
+        return DRIVE_FOLDER_ID, nombre_cliente
 
-def subir_a_drive(contenido, nombre_archivo, mimetype, nombre_cliente):
+def obtener_nombre_archivo(carpeta_id, tipo_doc):
+    # Cuenta cuántos archivos del mismo tipo ya existen en la carpeta
     try:
         service = get_drive_service()
-        carpeta_id = obtener_o_crear_carpeta(nombre_cliente)
+        query = f"name contains '{tipo_doc}' and '{carpeta_id}' in parents and trashed=false"
+        results = service.files().list(q=query, fields="files(name)").execute()
+        existentes = results.get("files", [])
+        count = len(existentes)
+        if count == 0:
+            return tipo_doc
+        return f"{tipo_doc}{count + 1}"
+    except Exception as e:
+        print(f"Error contando archivos: {e}")
+        return tipo_doc
+
+def subir_a_drive(contenido, tipo_doc, mimetype, nombre_cliente, numero_ws):
+    try:
+        service = get_drive_service()
+        carpeta_id, _ = obtener_o_crear_carpeta(nombre_cliente, numero_ws)
+        nombre_archivo = obtener_nombre_archivo(carpeta_id, tipo_doc)
+        extension = mimetype.split("/")[-1]
+        nombre_final = f"{nombre_archivo}.{extension}"
         file_stream = io.BytesIO(contenido)
         media = MediaIoBaseUpload(file_stream, mimetype=mimetype)
-        file_metadata = {"name": nombre_archivo, "parents": [carpeta_id]}
+        file_metadata = {"name": nombre_final, "parents": [carpeta_id]}
         service.files().create(body=file_metadata, media_body=media).execute()
-        return True
+        return True, nombre_archivo
     except Exception as e:
         print(f"Error subiendo a Drive: {e}")
-        return False
+        return False, tipo_doc
 
 def verificar_disponibilidad(fecha_str, hora_str):
     try:
@@ -330,8 +361,19 @@ def responder(mensaje, numero):
                 f"¿Confirmás? Respondé *SI* o *NO*")
     # Flujo de documentación
     if estado.get("paso") == "doc_nombre":
-        conversaciones[numero] = {"paso": "doc_esperar", "nombre_cliente": mensaje.strip()}
-        return f"📎 Perfecto, *{mensaje.strip()}*. Ahora enviá tu documento en formato *PDF* y lo guardamos en tu carpeta personal 🔒"
+        conversaciones[numero] = {**estado, "paso": "doc_tipo", "nombre_cliente": mensaje.strip()}
+        return (f"📄 ¿Qué tipo de documento vas a enviar?\n\n"
+                f"1️⃣ Pasaporte\n"
+                f"2️⃣ Visa\n"
+                f"3️⃣ DNI")
+
+    if estado.get("paso") == "doc_tipo":
+        tipos = {"1": "Pasaporte", "2": "Visa", "3": "DNI"}
+        tipo = tipos.get(mensaje.strip())
+        if not tipo:
+            return "Por favor respondé *1* para Pasaporte, *2* para Visa o *3* para DNI."
+        conversaciones[numero] = {**estado, "paso": "doc_esperar", "tipo_doc": tipo}
+        return f"📎 Perfecto. Ahora enviá tu *{tipo}* y lo guardamos en tu carpeta personal 🔒"
 
     # Menú principal
     if msg in ["hola", "buenas", "buenos dias", "buenas tardes", "buenas noches", "inicio", "menu", "menú", "start"]:
@@ -389,17 +431,16 @@ def webhook():
 
         elif tipo in ["document", "image"]:
             mime_type = message[tipo].get("mime_type", "application/octet-stream")
-            extension = mime_type.split("/")[-1]
 
             if estado.get("paso") == "doc_esperar":
                 nombre_cliente = estado["nombre_cliente"]
+                tipo_doc = estado.get("tipo_doc", "Documento")
                 media_id = message[tipo]["id"]
                 contenido, mime = descargar_media_meta(media_id)
-                nombre_archivo = f"{nombre_cliente}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{extension}"
-                exito = subir_a_drive(contenido, nombre_archivo, mime, nombre_cliente)
+                exito, nombre_guardado = subir_a_drive(contenido, tipo_doc, mime, nombre_cliente, numero)
                 conversaciones.pop(numero, None)
                 if exito:
-                    enviar_mensaje(numero, f"✅ Documento guardado correctamente en la carpeta de *{nombre_cliente}* 🔒")
+                    enviar_mensaje(numero, f"✅ *{nombre_guardado}* guardado correctamente en tu carpeta personal 🔒")
                 else:
                     enviar_mensaje(numero, "❌ Hubo un error al guardar el documento. Intentá de nuevo.")
             else:
