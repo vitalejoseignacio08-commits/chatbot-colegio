@@ -99,7 +99,7 @@ def subir_a_drive(contenido, nombre_archivo, mimetype, nombre_cliente):
         print(f"Error subiendo a Drive: {e}")
         return False
 
-def agendar_cita(nombre, fecha_str, motivo, telefono, sucursal, hora_str="10:00"):
+def agendar_cita(nombre, fecha_str, motivo, telefono, sucursal, hora_str="10:00", email=""):
     try:
         service = get_calendar_service()
         fecha = datetime.strptime(fecha_str, "%d/%m/%Y")
@@ -108,7 +108,7 @@ def agendar_cita(nombre, fecha_str, motivo, telefono, sucursal, hora_str="10:00"
         fin = inicio + timedelta(minutes=30)
         evento = {
             "summary": f"Consulta Gen Viajero: {nombre}",
-            "description": f"Motivo: {motivo}\nTeléfono: {telefono}\nSucursal: {sucursal}",
+            "description": f"Motivo: {motivo}\nTeléfono: {telefono}\nEmail: {email}\nSucursal: {sucursal}",
             "start": {"dateTime": inicio.isoformat(), "timeZone": "America/Argentina/Buenos_Aires"},
             "end": {"dateTime": fin.isoformat(), "timeZone": "America/Argentina/Buenos_Aires"},
         }
@@ -206,10 +206,24 @@ def responder(mensaje, numero):
             hora = datetime.strptime(mensaje.strip(), "%H:%M").time()
             if hora < datetime.strptime("10:00", "%H:%M").time() or hora > datetime.strptime("20:00", "%H:%M").time():
                 return "❌ El horario debe ser entre las *10:00 y las 20:00hs*. Intentá de nuevo."
-            conversaciones[numero] = {**estado, "paso": "cita_motivo", "hora": mensaje.strip()}
-            return "📝 ¿Sobre qué querés consultar? (ejemplo: viaje a Europa, luna de miel, viaje grupal...)"
+            conversaciones[numero] = {**estado, "paso": "cita_email", "hora": mensaje.strip()}
+            return "📧 ¿Cuál es tu email?\nEscribilo así: *nombreapellido@gmail.com*"
         except:
             return "❌ Formato de hora incorrecto. Escribila así: *HH:MM* (ejemplo: 14:00)"
+
+    if estado.get("paso") == "cita_email":
+        email = mensaje.strip()
+        intentos = estado.get("intentos_email", 0)
+        if "@" in email and "." in email.split("@")[-1] and len(email.split("@")) == 2:
+            conversaciones[numero] = {**estado, "paso": "cita_motivo", "email": email}
+            return "📝 ¿Sobre qué querés consultar? (ejemplo: viaje a Europa, luna de miel, viaje grupal...)"
+        else:
+            intentos += 1
+            if intentos >= 3:
+                conversaciones.pop(numero, None)
+                return "❌ Demasiados intentos. Escribí *menú* para empezar de nuevo."
+            conversaciones[numero] = {**estado, "paso": "cita_email", "intentos_email": intentos}
+            return f"❌ Ese email no es válido. Tiene que tener @ y un dominio.\nEjemplo: *nombreapellido@gmail.com* — Te quedan *{3 - intentos} intentos*."
 
     if estado.get("paso") == "cita_motivo":
         nombre = estado["nombre"]
@@ -217,13 +231,15 @@ def responder(mensaje, numero):
         hora = estado["hora"]
         telefono = estado.get("telefono", numero)
         sucursal = estado.get("sucursal", "Monte Buey")
+        email = estado.get("email", "")
         motivo = mensaje.strip()
         conversaciones.pop(numero, None)
-        exito = agendar_cita(nombre, fecha, motivo, telefono, sucursal, hora)
+        exito = agendar_cita(nombre, fecha, motivo, telefono, sucursal, hora, email)
         if exito:
             return (f"✅ ¡Listo! Tu consulta quedó agendada 🎉\n\n"
                     f"👤 *Nombre:* {nombre}\n"
                     f"📱 *Teléfono:* {telefono}\n"
+                    f"📧 *Email:* {email}\n"
                     f"📍 *Sucursal:* {sucursal}\n"
                     f"📅 *Fecha:* {fecha}\n"
                     f"🕐 *Hora:* {hora}hs\n"
