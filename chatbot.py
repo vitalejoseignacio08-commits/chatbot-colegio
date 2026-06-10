@@ -99,6 +99,56 @@ def subir_a_drive(contenido, nombre_archivo, mimetype, nombre_cliente):
         print(f"Error subiendo a Drive: {e}")
         return False
 
+def verificar_disponibilidad(fecha_str, hora_str):
+    try:
+        service = get_calendar_service()
+        fecha = datetime.strptime(fecha_str, "%d/%m/%Y")
+        hora = datetime.strptime(hora_str, "%H:%M").time()
+        inicio_pedido = datetime.combine(fecha, hora)
+        fin_pedido = inicio_pedido + timedelta(minutes=30)
+
+        # Buscar eventos del día
+        inicio_dia = fecha.replace(hour=0, minute=0, second=0).isoformat() + "-03:00"
+        fin_dia = fecha.replace(hour=23, minute=59, second=59).isoformat() + "-03:00"
+        eventos = service.events().list(
+            calendarId="primary",
+            timeMin=inicio_dia,
+            timeMax=fin_dia,
+            singleEvents=True
+        ).execute().get("items", [])
+
+        # Verificar si el horario pedido choca con algún evento
+        for evento in eventos:
+            inicio_ev = datetime.fromisoformat(evento["start"].get("dateTime", "").replace("-03:00", ""))
+            fin_ev = datetime.fromisoformat(evento["end"].get("dateTime", "").replace("-03:00", ""))
+            if inicio_pedido < fin_ev and fin_pedido > inicio_ev:
+                # Buscar próximos horarios libres
+                proximos = []
+                candidato = fin_ev
+                # Redondear al próximo múltiplo de 5
+                minutos = candidato.minute
+                resto = minutos % 5
+                if resto != 0:
+                    candidato = candidato + timedelta(minutes=(5 - resto))
+                candidato = candidato.replace(second=0, microsecond=0)
+                while len(proximos) < 3:
+                    fin_candidato = candidato + timedelta(minutes=30)
+                    libre = True
+                    for ev2 in eventos:
+                        ini2 = datetime.fromisoformat(ev2["start"].get("dateTime", "").replace("-03:00", ""))
+                        fin2 = datetime.fromisoformat(ev2["end"].get("dateTime", "").replace("-03:00", ""))
+                        if candidato < fin2 and fin_candidato > ini2:
+                            libre = False
+                            break
+                    if libre and candidato.time() >= datetime.strptime("10:00", "%H:%M").time() and candidato.time() <= datetime.strptime("20:00", "%H:%M").time():
+                        proximos.append(candidato.strftime("%H:%M"))
+                    candidato += timedelta(minutes=5)
+                return False, proximos
+        return True, []
+    except Exception as e:
+        print(f"Error verificando disponibilidad: {e}")
+        return True, []
+
 def agendar_cita(nombre, fecha_str, motivo, telefono, sucursal, hora_str="10:00", email=""):
     try:
         service = get_calendar_service()
@@ -206,6 +256,14 @@ def responder(mensaje, numero):
             hora = datetime.strptime(mensaje.strip(), "%H:%M").time()
             if hora < datetime.strptime("10:00", "%H:%M").time() or hora > datetime.strptime("20:00", "%H:%M").time():
                 return "❌ El horario debe ser entre las *10:00 y las 20:00hs*. Intentá de nuevo."
+            if hora.minute % 5 != 0:
+                return "❌ El horario debe terminar en 0 o 5. Ejemplo: *10:00*, *10:15*, *10:30*. Intentá de nuevo."
+            # Verificar disponibilidad en Google Calendar
+            fecha_str = estado["fecha"]
+            disponible, proximos = verificar_disponibilidad(fecha_str, mensaje.strip())
+            if not disponible:
+                proximos_txt = "\n".join([f"🟢 {h}" for h in proximos])
+                return f"❌ Ese horario ya está reservado. Los próximos horarios disponibles son:\n{proximos_txt}\n\nEscribí el horario que preferís."
             conversaciones[numero] = {**estado, "paso": "cita_email", "hora": mensaje.strip()}
             return "📧 ¿Cuál es tu email?\nEscribilo así: *nombreapellido@gmail.com*"
         except:
@@ -225,6 +283,33 @@ def responder(mensaje, numero):
             conversaciones[numero] = {**estado, "paso": "cita_email", "intentos_email": intentos}
             return f"❌ Ese email no es válido. Tiene que tener @ y un dominio.\nEjemplo: *nombreapellido@gmail.com* — Te quedan *{3 - intentos} intentos*."
 
+    if estado.get("paso") == "cita_confirmar":
+        if mensaje.strip().lower() in ["si", "sí", "s"]:
+            nombre = estado["nombre"]
+            fecha = estado["fecha"]
+            hora = estado["hora"]
+            telefono = estado.get("telefono", numero)
+            sucursal = estado.get("sucursal", "Monte Buey")
+            email = estado.get("email", "")
+            motivo = estado.get("motivo", "")
+            conversaciones.pop(numero, None)
+            exito = agendar_cita(nombre, fecha, motivo, telefono, sucursal, hora, email)
+            if exito:
+                return (f"✅ ¡Listo! Tu consulta quedó agendada 🎉\n\n"
+                        f"👤 *Nombre:* {nombre}\n"
+                        f"📱 *Teléfono:* {telefono}\n"
+                        f"📧 *Email:* {email}\n"
+                        f"📍 *Sucursal:* {sucursal}\n"
+                        f"📅 *Fecha:* {fecha}\n"
+                        f"🕐 *Hora:* {hora}hs\n"
+                        f"📝 *Motivo:* {motivo}\n\n"
+                        f"¡Un agente de *Gen Viajero* te va a estar esperando! 🌍")
+            else:
+                return "❌ Hubo un error al agendar. Intentá de nuevo o contactanos directamente."
+        else:
+            conversaciones.pop(numero, None)
+            return "❌ Consulta cancelada. Escribí *menú* para empezar de nuevo."
+
     if estado.get("paso") == "cita_motivo":
         nombre = estado["nombre"]
         fecha = estado["fecha"]
@@ -233,21 +318,16 @@ def responder(mensaje, numero):
         sucursal = estado.get("sucursal", "Monte Buey")
         email = estado.get("email", "")
         motivo = mensaje.strip()
-        conversaciones.pop(numero, None)
-        exito = agendar_cita(nombre, fecha, motivo, telefono, sucursal, hora, email)
-        if exito:
-            return (f"✅ ¡Listo! Tu consulta quedó agendada 🎉\n\n"
-                    f"👤 *Nombre:* {nombre}\n"
-                    f"📱 *Teléfono:* {telefono}\n"
-                    f"📧 *Email:* {email}\n"
-                    f"📍 *Sucursal:* {sucursal}\n"
-                    f"📅 *Fecha:* {fecha}\n"
-                    f"🕐 *Hora:* {hora}hs\n"
-                    f"📝 *Motivo:* {motivo}\n\n"
-                    f"¡Un agente de *Gen Viajero* te va a estar esperando! 🌍")
-        else:
-            return "❌ Hubo un error al agendar. Intentá de nuevo o contactanos directamente."
-
+        conversaciones[numero] = {**estado, "paso": "cita_confirmar", "motivo": motivo}
+        return (f"📋 *Revisá tu consulta antes de confirmar:*\n\n"
+                f"👤 *Nombre:* {nombre}\n"
+                f"📱 *Teléfono:* {telefono}\n"
+                f"📧 *Email:* {email}\n"
+                f"📍 *Sucursal:* {sucursal}\n"
+                f"📅 *Fecha:* {fecha}\n"
+                f"🕐 *Hora:* {hora}hs\n"
+                f"📝 *Motivo:* {motivo}\n\n"
+                f"¿Confirmás? Respondé *SI* o *NO*")
     # Flujo de documentación
     if estado.get("paso") == "doc_nombre":
         conversaciones[numero] = {"paso": "doc_esperar", "nombre_cliente": mensaje.strip()}
