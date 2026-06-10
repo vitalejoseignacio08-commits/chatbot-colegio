@@ -10,17 +10,11 @@ from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-# Google config
 DRIVE_FOLDER_ID = "1_o3PbEP9KOaJ4kN-0eu3j3JyKUgG0vSj"
-
-# Meta config
 PHONE_NUMBER_ID = os.environ.get("META_PHONE_NUMBER_ID", "1064536793419567")
 META_TOKEN = os.environ.get("META_ACCESS_TOKEN")
 VERIFY_TOKEN = os.environ.get("META_VERIFY_TOKEN", "colegio_agrotecnico_bot")
-
-# Estado de conversación
 conversaciones = {}
-
 NUMERO_GUARDIA = "+5493467415772"
 HORARIO_ATENCION = "lunes a viernes de 10:00 a 20:00hs"
 
@@ -28,13 +22,8 @@ def get_credentials():
     refresh_token = "1//" + os.environ.get("GOOGLE_REFRESH_TOKEN", "")
     client_id = os.environ.get("GOOGLE_CLIENT_ID_PREFIX", "") + os.environ.get("GOOGLE_CLIENT_ID_SUFFIX", "")
     client_secret = os.environ.get("GOOGLE_CLIENT_SECRET")
-    creds = Credentials(
-        token=None,
-        refresh_token=refresh_token,
-        client_id=client_id,
-        client_secret=client_secret,
-        token_uri="https://oauth2.googleapis.com/token"
-    )
+    creds = Credentials(token=None, refresh_token=refresh_token, client_id=client_id,
+                        client_secret=client_secret, token_uri="https://oauth2.googleapis.com/token")
     creds.refresh(Request())
     return creds
 
@@ -46,16 +35,8 @@ def get_calendar_service():
 
 def enviar_mensaje(numero, texto):
     url = f"https://graph.facebook.com/v25.0/{PHONE_NUMBER_ID}/messages"
-    headers = {
-        "Authorization": f"Bearer {META_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "messaging_product": "whatsapp",
-        "to": numero,
-        "type": "text",
-        "text": {"body": texto}
-    }
+    headers = {"Authorization": f"Bearer {META_TOKEN}", "Content-Type": "application/json"}
+    data = {"messaging_product": "whatsapp", "to": numero, "type": "text", "text": {"body": texto}}
     r = requests.post(url, headers=headers, json=data)
     print(f"Respuesta Meta: {r.status_code} - {r.text}")
 
@@ -69,7 +50,6 @@ def descargar_media_meta(media_id):
     return media_content, mime_type
 
 def formatear_numero(numero):
-    # numero llega como "5493467123456" → "+54 9 3467 12-3456"
     n = numero.lstrip("+")
     if n.startswith("54") and len(n) == 13:
         area = n[3:7]
@@ -83,7 +63,6 @@ def obtener_o_crear_carpeta(nombre_cliente, numero_ws):
         service = get_drive_service()
         numero_fmt = formatear_numero(numero_ws)
         nombre_carpeta = f"{nombre_cliente} ({numero_fmt})"
-        # Buscar por número exacto en el nombre (único e inmutable)
         query = f"name='{nombre_carpeta}' and mimeType='application/vnd.google-apps.folder' and '{DRIVE_FOLDER_ID}' in parents and trashed=false"
         results = service.files().list(q=query, fields="files(id)").execute()
         carpetas = results.get("files", [])
@@ -100,19 +79,45 @@ def obtener_o_crear_carpeta(nombre_cliente, numero_ws):
         return DRIVE_FOLDER_ID, nombre_cliente
 
 def obtener_nombre_archivo(carpeta_id, tipo_doc):
-    # Cuenta cuántos archivos del mismo tipo ya existen en la carpeta
     try:
         service = get_drive_service()
         query = f"name contains '{tipo_doc}' and '{carpeta_id}' in parents and trashed=false"
         results = service.files().list(q=query, fields="files(name)").execute()
-        existentes = results.get("files", [])
-        count = len(existentes)
+        count = len(results.get("files", []))
         if count == 0:
             return tipo_doc
         return f"{tipo_doc}{count + 1}"
     except Exception as e:
         print(f"Error contando archivos: {e}")
         return tipo_doc
+
+def listar_documentos(numero_ws):
+    try:
+        service = get_drive_service()
+        numero_fmt = formatear_numero(numero_ws)
+        query = f"name contains '{numero_fmt}' and mimeType='application/vnd.google-apps.folder' and '{DRIVE_FOLDER_ID}' in parents and trashed=false"
+        results = service.files().list(q=query, fields="files(id, name)").execute()
+        carpetas = results.get("files", [])
+        if not carpetas:
+            return None
+        carpeta_id = carpetas[0]["id"]
+        archivos = service.files().list(
+            q=f"'{carpeta_id}' in parents and trashed=false",
+            fields="files(name)"
+        ).execute().get("files", [])
+        if not archivos:
+            return {}
+        conteos = {}
+        for archivo in archivos:
+            nombre = archivo["name"]
+            for tipo in ["Pasaporte", "Visa", "DNI"]:
+                if nombre.startswith(tipo):
+                    conteos[tipo] = conteos.get(tipo, 0) + 1
+                    break
+        return conteos
+    except Exception as e:
+        print(f"Error listando documentos: {e}")
+        return None
 
 def subir_a_drive(contenido, tipo_doc, mimetype, nombre_cliente, numero_ws):
     try:
@@ -137,28 +142,18 @@ def verificar_disponibilidad(fecha_str, hora_str):
         hora = datetime.strptime(hora_str, "%H:%M").time()
         inicio_pedido = datetime.combine(fecha, hora)
         fin_pedido = inicio_pedido + timedelta(minutes=30)
-
-        # Buscar eventos del día
         inicio_dia = fecha.replace(hour=0, minute=0, second=0).isoformat() + "-03:00"
         fin_dia = fecha.replace(hour=23, minute=59, second=59).isoformat() + "-03:00"
         eventos = service.events().list(
-            calendarId="primary",
-            timeMin=inicio_dia,
-            timeMax=fin_dia,
-            singleEvents=True
+            calendarId="primary", timeMin=inicio_dia, timeMax=fin_dia, singleEvents=True
         ).execute().get("items", [])
-
-        # Verificar si el horario pedido choca con algún evento
         for evento in eventos:
             inicio_ev = datetime.fromisoformat(evento["start"].get("dateTime", "").replace("-03:00", ""))
             fin_ev = datetime.fromisoformat(evento["end"].get("dateTime", "").replace("-03:00", ""))
             if inicio_pedido < fin_ev and fin_pedido > inicio_ev:
-                # Buscar próximos horarios libres
                 proximos = []
                 candidato = fin_ev
-                # Redondear al próximo múltiplo de 5
-                minutos = candidato.minute
-                resto = minutos % 5
+                resto = candidato.minute % 5
                 if resto != 0:
                     candidato = candidato + timedelta(minutes=(5 - resto))
                 candidato = candidato.replace(second=0, microsecond=0)
@@ -171,7 +166,9 @@ def verificar_disponibilidad(fecha_str, hora_str):
                         if candidato < fin2 and fin_candidato > ini2:
                             libre = False
                             break
-                    if libre and candidato.time() >= datetime.strptime("10:00", "%H:%M").time() and candidato.time() <= datetime.strptime("20:00", "%H:%M").time():
+                    hora_min = datetime.strptime("10:00", "%H:%M").time()
+                    hora_max = datetime.strptime("20:00", "%H:%M").time()
+                    if libre and hora_min <= candidato.time() <= hora_max:
                         proximos.append(candidato.strftime("%H:%M"))
                     candidato += timedelta(minutes=5)
                 return False, proximos
@@ -189,7 +186,7 @@ def agendar_cita(nombre, fecha_str, motivo, telefono, sucursal, hora_str="10:00"
         fin = inicio + timedelta(minutes=30)
         evento = {
             "summary": f"Consulta Gen Viajero: {nombre}",
-            "description": f"Motivo: {motivo}\nTeléfono: {telefono}\nEmail: {email}\nSucursal: {sucursal}",
+            "description": f"Motivo: {motivo}\nTelefono: {telefono}\nEmail: {email}\nSucursal: {sucursal}",
             "start": {"dateTime": inicio.isoformat(), "timeZone": "America/Argentina/Buenos_Aires"},
             "end": {"dateTime": fin.isoformat(), "timeZone": "America/Argentina/Buenos_Aires"},
         }
@@ -215,14 +212,13 @@ def responder(mensaje, numero):
     msg = mensaje.strip().lower()
     estado = conversaciones.get(numero, {})
 
-    # Flujo de agendar cita
     if estado.get("paso") == "cita_sucursal":
         if mensaje.strip() == "1":
             conversaciones[numero] = {**estado, "paso": "cita_nombre", "sucursal": "Monte Buey"}
             return "👤 ¿Cuál es tu nombre completo?"
         elif mensaje.strip() == "2":
             conversaciones[numero] = {**estado, "paso": "cita_nombre", "sucursal": "Justiniano Posse"}
-            return "👤 ¿Cuál es tu nombre completo?"
+            return "Cual es tu nombre completo?"
         else:
             return "Por favor respondé *1* para Monte Buey o *2* para Justiniano Posse."
 
@@ -236,7 +232,7 @@ def responder(mensaje, numero):
         if tel.isdigit() and len(tel) == 10:
             tel_formateado = f"+54 9 {tel[:4]} {tel[4:6]}-{tel[6:]}"
             conversaciones[numero] = {**estado, "paso": "cita_fecha", "telefono": tel_formateado}
-            return "📅 ¿Qué fecha preferís?\nEscribila así: *DD/MM/AAAA* — de lunes a viernes, hasta 15 días adelante."
+            return "Que fecha preferis?\nEscribila asi: *DD/MM/AAAA* - de lunes a viernes, hasta 15 dias adelante."
         else:
             intentos += 1
             if intentos >= 3:
@@ -262,14 +258,14 @@ def responder(mensaje, numero):
                 intentos += 1
                 if intentos >= 3:
                     conversaciones.pop(numero, None)
-                    return "❌ Demasiados intentos. Escribí *menú* para empezar de nuevo."
+                    return "Demasiados intentos. Escribi *menu* para empezar de nuevo."
                 conversaciones[numero] = {**estado, "paso": "cita_fecha", "intentos_fecha": intentos}
                 return f"❌ Solo podés agendar hasta 15 días adelante. La fecha máxima es *{fecha_max.strftime('%d/%m/%Y')}* — Te quedan *{3 - intentos} intentos*."
             if fecha.weekday() >= 5:
                 intentos += 1
                 if intentos >= 3:
                     conversaciones.pop(numero, None)
-                    return "❌ Demasiados intentos. Escribí *menú* para empezar de nuevo."
+                    return "Demasiados intentos. Escribi *menu* para empezar de nuevo."
                 conversaciones[numero] = {**estado, "paso": "cita_fecha", "intentos_fecha": intentos}
                 return f"❌ Esa fecha es fin de semana. Elegí un día de lunes a viernes — Te quedan *{3 - intentos} intentos*."
             conversaciones[numero] = {**estado, "paso": "cita_hora", "fecha": mensaje.strip()}
@@ -278,9 +274,9 @@ def responder(mensaje, numero):
             intentos += 1
             if intentos >= 3:
                 conversaciones.pop(numero, None)
-                return "❌ Demasiados intentos. Escribí *menú* para empezar de nuevo."
+                return "Demasiados intentos. Escribi *menu* para empezar de nuevo."
             conversaciones[numero] = {**estado, "paso": "cita_fecha", "intentos_fecha": intentos}
-            return f"❌ Esa fecha no existe. Escribila así: *DD/MM/AAAA* — Ejemplo: *15/06/XXXX* — Te quedan *{3 - intentos} intentos*."
+            return f"❌ Esa fecha no existe. Escribila así: *DD/MM/AAAA* — Te quedan *{3 - intentos} intentos*."
 
     if estado.get("paso") == "cita_hora":
         try:
@@ -289,9 +285,7 @@ def responder(mensaje, numero):
                 return "❌ El horario debe ser entre las *10:00 y las 20:00hs*. Intentá de nuevo."
             if hora.minute % 5 != 0:
                 return "❌ El horario debe terminar en 0 o 5. Ejemplo: *10:00*, *10:15*, *10:30*. Intentá de nuevo."
-            # Verificar disponibilidad en Google Calendar
-            fecha_str = estado["fecha"]
-            disponible, proximos = verificar_disponibilidad(fecha_str, mensaje.strip())
+            disponible, proximos = verificar_disponibilidad(estado["fecha"], mensaje.strip())
             if not disponible:
                 proximos_txt = "\n".join([f"🟢 {h}" for h in proximos])
                 return f"❌ Ese horario ya está reservado. Los próximos horarios disponibles son:\n{proximos_txt}\n\nEscribí el horario que preferís."
@@ -310,36 +304,9 @@ def responder(mensaje, numero):
             intentos += 1
             if intentos >= 3:
                 conversaciones.pop(numero, None)
-                return "❌ Demasiados intentos. Escribí *menú* para empezar de nuevo."
+                return "Demasiados intentos. Escribi *menu* para empezar de nuevo."
             conversaciones[numero] = {**estado, "paso": "cita_email", "intentos_email": intentos}
             return f"❌ Ese email no es válido. Tiene que tener @ y un dominio.\nEjemplo: *nombreapellido@gmail.com* — Te quedan *{3 - intentos} intentos*."
-
-    if estado.get("paso") == "cita_confirmar":
-        if mensaje.strip().lower() in ["si", "sí", "s"]:
-            nombre = estado["nombre"]
-            fecha = estado["fecha"]
-            hora = estado["hora"]
-            telefono = estado.get("telefono", numero)
-            sucursal = estado.get("sucursal", "Monte Buey")
-            email = estado.get("email", "")
-            motivo = estado.get("motivo", "")
-            conversaciones.pop(numero, None)
-            exito = agendar_cita(nombre, fecha, motivo, telefono, sucursal, hora, email)
-            if exito:
-                return (f"✅ ¡Listo! Tu consulta quedó agendada 🎉\n\n"
-                        f"👤 *Nombre:* {nombre}\n"
-                        f"📱 *Teléfono:* {telefono}\n"
-                        f"📧 *Email:* {email}\n"
-                        f"📍 *Sucursal:* {sucursal}\n"
-                        f"📅 *Fecha:* {fecha}\n"
-                        f"🕐 *Hora:* {hora}hs\n"
-                        f"📝 *Motivo:* {motivo}\n\n"
-                        f"¡Un agente de *Gen Viajero* te va a estar esperando! 🌍")
-            else:
-                return "❌ Hubo un error al agendar. Intentá de nuevo o contactanos directamente."
-        else:
-            conversaciones.pop(numero, None)
-            return "❌ Consulta cancelada. Escribí *menú* para empezar de nuevo."
 
     if estado.get("paso") == "cita_motivo":
         nombre = estado["nombre"]
@@ -359,13 +326,67 @@ def responder(mensaje, numero):
                 f"🕐 *Hora:* {hora}hs\n"
                 f"📝 *Motivo:* {motivo}\n\n"
                 f"¿Confirmás? Respondé *SI* o *NO*")
-    # Flujo de documentación
+
+    if estado.get("paso") == "cita_confirmar":
+        if mensaje.strip().lower() in ["si", "s"]:
+            nombre = estado["nombre"]
+            fecha = estado["fecha"]
+            hora = estado["hora"]
+            telefono = estado.get("telefono", numero)
+            sucursal = estado.get("sucursal", "Monte Buey")
+            email = estado.get("email", "")
+            motivo = estado.get("motivo", "")
+            conversaciones.pop(numero, None)
+            exito = agendar_cita(nombre, fecha, motivo, telefono, sucursal, hora, email)
+            if exito:
+                return (f"✅ ¡Listo! Tu consulta quedó agendada 🎉\n\n"
+                        f"Nombre: {nombre}\n"
+                        f"Telefono: {telefono}\n"
+                        f"Email: {email}\n"
+                        f"Sucursal: {sucursal}\n"
+                        f"Fecha: {fecha}\n"
+                        f"Hora: {hora}hs\n"
+                        f"Motivo: {motivo}\n\n"
+                        f"¡Un agente de *Gen Viajero* te va a estar esperando! 🌍")
+            else:
+                return "❌ Hubo un error al agendar. Intentá de nuevo o contactanos directamente."
+        else:
+            conversaciones.pop(numero, None)
+            return "❌ Consulta cancelada. Escribí *menú* para empezar de nuevo."
+
+    if estado.get("paso") == "doc_menu":
+        if mensaje.strip() == "1":
+            conversaciones[numero] = {**estado, "paso": "doc_nombre"}
+            return "👤 ¿Cuál es tu nombre y apellido completo?"
+        elif mensaje.strip() == "2":
+            conteos = listar_documentos(numero)
+            conversaciones.pop(numero, None)
+            if conteos is None or conteos == {}:
+                conversaciones[numero] = {"paso": "doc_menu_vacio"}
+                return ("📂 Todavía no tenés documentos guardados.\n\n"
+                        "¿Querés subir uno ahora?\n\n"
+                        "1️⃣ Sí, subir documentación\n"
+                        "2️⃣ No, volver al menú")
+            emojis = {"Pasaporte": "🛂", "Visa": "✈️", "DNI": "🪪"}
+            lineas = [f"{emojis.get(t, '📄')} {t}: {c}" for t, c in conteos.items()]
+            return "📂 *Tu documentación guardada:*\n\n" + "\n".join(lineas)
+        else:
+            return "Por favor respondé *1* para subir o *2* para ver tus documentos."
+
+    if estado.get("paso") == "doc_menu_vacio":
+        if mensaje.strip() == "1":
+            conversaciones[numero] = {"paso": "doc_nombre"}
+            return "Cual es tu nombre y apellido completo?"
+        else:
+            conversaciones.pop(numero, None)
+            return MENU
+
     if estado.get("paso") == "doc_nombre":
         conversaciones[numero] = {**estado, "paso": "doc_tipo", "nombre_cliente": mensaje.strip()}
-        return (f"📄 ¿Qué tipo de documento vas a enviar?\n\n"
-                f"1️⃣ Pasaporte\n"
-                f"2️⃣ Visa\n"
-                f"3️⃣ DNI")
+        return ("📄 ¿Qué tipo de documento vas a enviar?\n\n"
+                "1️⃣ Pasaporte\n"
+                "2️⃣ Visa\n"
+                "3️⃣ DNI")
 
     if estado.get("paso") == "doc_tipo":
         tipos = {"1": "Pasaporte", "2": "Visa", "3": "DNI"}
@@ -375,7 +396,6 @@ def responder(mensaje, numero):
         conversaciones[numero] = {**estado, "paso": "doc_esperar", "tipo_doc": tipo}
         return f"📎 Perfecto. Ahora enviá tu *{tipo}* y lo guardamos en tu carpeta personal 🔒"
 
-    # Menú principal
     if msg in ["hola", "buenas", "buenos dias", "buenas tardes", "buenas noches", "inicio", "menu", "menú", "start"]:
         return MENU
     elif msg == "2":
@@ -387,8 +407,10 @@ def responder(mensaje, numero):
                 "1️⃣ 📍 Monte Buey\n"
                 "2️⃣ 📍 Justiniano Posse")
     elif msg == "4":
-        conversaciones[numero] = {"paso": "doc_nombre"}
-        return "📁 ¡Claro! Para guardar tu documentación de forma segura, ¿cuál es tu nombre y apellido completo? 👤"
+        conversaciones[numero] = {"paso": "doc_menu"}
+        return ("📁 ¿Qué querés hacer?\n\n"
+                "1️⃣ Subir documentación\n"
+                "2️⃣ Ver mis documentos guardados")
     elif msg == "5":
         return (f"🚨 *¿Estás en una emergencia durante tu viaje?*\n\n"
                 f"Contactá ahora a nuestra línea de guardia:\n"
@@ -415,23 +437,18 @@ def webhook():
         entry = data["entry"][0]
         changes = entry["changes"][0]
         value = changes["value"]
-
         if "messages" not in value:
             return "OK", 200
-
         message = value["messages"][0]
         numero = message["from"]
         tipo = message.get("type")
         estado = conversaciones.get(numero, {})
-
         if tipo == "text":
             texto = message["text"]["body"]
             respuesta = responder(texto, numero)
             enviar_mensaje(numero, respuesta)
-
         elif tipo in ["document", "image"]:
             mime_type = message[tipo].get("mime_type", "application/octet-stream")
-
             if estado.get("paso") == "doc_esperar":
                 nombre_cliente = estado["nombre_cliente"]
                 tipo_doc = estado.get("tipo_doc", "Documento")
@@ -445,10 +462,8 @@ def webhook():
                     enviar_mensaje(numero, "❌ Hubo un error al guardar el documento. Intentá de nuevo.")
             else:
                 enviar_mensaje(numero, "👤 Para enviar documentación usá la opción *4* del menú primero, así lo guardamos en tu carpeta personal.")
-
     except Exception as e:
         print(f"Error procesando mensaje: {e}")
-
     return "OK", 200
 
 if __name__ == "__main__":
