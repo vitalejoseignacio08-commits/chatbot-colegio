@@ -4,6 +4,7 @@ from googleapiclient.http import MediaIoBaseUpload
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from apscheduler.schedulers.background import BackgroundScheduler
+from collections import OrderedDict
 import os
 import io
 import requests
@@ -21,6 +22,33 @@ NUMERO_GUARDIA_MONTE_BUEY = "+5493467415772"
 NUMERO_GUARDIA_POSSE = "+5493467434284"
 HORARIO_ATENCION = "lunes a viernes de 10:00 a 20:00hs"
 eventos_notificados = set()
+
+# Anti-spam: limite de mensajes por usuario
+mensajes_recientes = {}
+LIMITE_MENSAJES = 8
+VENTANA_SEGUNDOS = 10
+
+# Anti-duplicados: evita procesar dos veces el mismo mensaje (reintentos de Meta)
+mensajes_procesados = OrderedDict()
+LIMITE_IDS_PROCESADOS = 500
+
+def es_spam(numero):
+    ahora = datetime.now().timestamp()
+    timestamps = mensajes_recientes.get(numero, [])
+    timestamps = [t for t in timestamps if ahora - t < VENTANA_SEGUNDOS]
+    timestamps.append(ahora)
+    mensajes_recientes[numero] = timestamps
+    return len(timestamps) > LIMITE_MENSAJES
+
+def ya_procesado(msg_id):
+    if not msg_id:
+        return False
+    if msg_id in mensajes_procesados:
+        return True
+    mensajes_procesados[msg_id] = True
+    if len(mensajes_procesados) > LIMITE_IDS_PROCESADOS:
+        mensajes_procesados.popitem(last=False)
+    return False
 
 def get_credentials():
     refresh_token = "1//" + os.environ.get("GOOGLE_REFRESH_TOKEN", "")
@@ -274,6 +302,10 @@ def responder(mensaje, numero):
     msg = mensaje.strip().lower()
     estado = conversaciones.get(numero, {})
 
+    if msg in ["cancelar", "salir"] and estado.get("paso"):
+        conversaciones.pop(numero, None)
+        return "❌ Operación cancelada. Escribí *menú* para empezar de nuevo."
+
     if estado.get("paso") == "cita_sucursal":
         if mensaje.strip() == "1":
             conversaciones[numero] = {**estado, "paso": "cita_nombre", "sucursal": "Monte Buey"}
@@ -282,7 +314,12 @@ def responder(mensaje, numero):
             conversaciones[numero] = {**estado, "paso": "cita_nombre", "sucursal": "Justiniano Posse"}
             return "Cual es tu nombre completo?"
         else:
-            return "Por favor respondé *1* para Monte Buey o *2* para Justiniano Posse."
+            intentos = estado.get("intentos_sucursal", 0) + 1
+            if intentos >= 3:
+                conversaciones.pop(numero, None)
+                return "❌ Demasiados intentos. Escribí *menú* para empezar de nuevo."
+            conversaciones[numero] = {**estado, "intentos_sucursal": intentos}
+            return f"Por favor respondé *1* para Monte Buey o *2* para Justiniano Posse. — Te quedan *{3 - intentos} intentos*."
 
     if estado.get("paso") == "cita_nombre":
         conversaciones[numero] = {**estado, "paso": "cita_telefono", "nombre": mensaje.strip()}
@@ -341,11 +378,22 @@ def responder(mensaje, numero):
             return f"❌ Esa fecha no existe. Escribila así: *DD/MM/AAAA* — Te quedan *{3 - intentos} intentos*."
 
     if estado.get("paso") == "cita_hora":
+        intentos = estado.get("intentos_hora", 0)
         try:
             hora = datetime.strptime(mensaje.strip(), "%H:%M").time()
             if hora < datetime.strptime("10:00", "%H:%M").time() or hora > datetime.strptime("20:00", "%H:%M").time():
+                intentos += 1
+                if intentos >= 5:
+                    conversaciones.pop(numero, None)
+                    return "❌ Demasiados intentos. Escribí *menú* para empezar de nuevo."
+                conversaciones[numero] = {**estado, "intentos_hora": intentos}
                 return "❌ El horario debe ser entre las *10:00 y las 20:00hs*. Intentá de nuevo."
             if hora.minute % 5 != 0:
+                intentos += 1
+                if intentos >= 5:
+                    conversaciones.pop(numero, None)
+                    return "❌ Demasiados intentos. Escribí *menú* para empezar de nuevo."
+                conversaciones[numero] = {**estado, "intentos_hora": intentos}
                 return "❌ El horario debe terminar en 0 o 5. Ejemplo: *10:00*, *10:15*, *10:30*. Intentá de nuevo."
             disponible, proximos = verificar_disponibilidad(estado["fecha"], mensaje.strip())
             if not disponible:
@@ -354,7 +402,12 @@ def responder(mensaje, numero):
             conversaciones[numero] = {**estado, "paso": "cita_email", "hora": mensaje.strip()}
             return "📧 ¿Cuál es tu email?\nEscribilo así: *nombreapellido@gmail.com*"
         except:
-            return "❌ Formato de hora incorrecto. Escribila así: *HH:MM* (ejemplo: 14:00)"
+            intentos += 1
+            if intentos >= 5:
+                conversaciones.pop(numero, None)
+                return "❌ Demasiados intentos. Escribí *menú* para empezar de nuevo."
+            conversaciones[numero] = {**estado, "intentos_hora": intentos}
+            return f"❌ Formato de hora incorrecto. Escribila así: *HH:MM* (ejemplo: 14:00) — Te quedan *{5 - intentos} intentos*."
 
     if estado.get("paso") == "cita_email":
         email = mensaje.strip()
@@ -441,7 +494,12 @@ def responder(mensaje, numero):
             lineas = [f"{emojis.get(t, '📄')} {t}: {c}" for t, c in conteos.items()]
             return "📂 *Tu documentación guardada:*\n\n" + "\n".join(lineas)
         else:
-            return "Por favor respondé *1* para subir o *2* para ver tus documentos."
+            intentos = estado.get("intentos_doc_menu", 0) + 1
+            if intentos >= 3:
+                conversaciones.pop(numero, None)
+                return "❌ Demasiados intentos. Escribí *menú* para empezar de nuevo."
+            conversaciones[numero] = {**estado, "intentos_doc_menu": intentos}
+            return f"Por favor respondé *1* para subir o *2* para ver tus documentos. — Te quedan *{3 - intentos} intentos*."
 
     if estado.get("paso") == "doc_menu_vacio":
         if mensaje.strip() == "1":
@@ -462,9 +520,17 @@ def responder(mensaje, numero):
         tipos = {"1": "Pasaporte", "2": "Visa", "3": "DNI"}
         tipo = tipos.get(mensaje.strip())
         if not tipo:
-            return "Por favor respondé *1* para Pasaporte, *2* para Visa o *3* para DNI."
+            intentos = estado.get("intentos_doc_tipo", 0) + 1
+            if intentos >= 3:
+                conversaciones.pop(numero, None)
+                return "❌ Demasiados intentos. Escribí *menú* para empezar de nuevo."
+            conversaciones[numero] = {**estado, "intentos_doc_tipo": intentos}
+            return f"Por favor respondé *1* para Pasaporte, *2* para Visa o *3* para DNI. — Te quedan *{3 - intentos} intentos*."
         conversaciones[numero] = {**estado, "paso": "doc_esperar", "tipo_doc": tipo}
         return f"📎 Perfecto. Ahora enviá tu *{tipo}* y lo guardamos en tu carpeta personal 🔒"
+
+    if estado.get("paso") == "doc_esperar":
+        return "📎 Estoy esperando que envíes tu documento (foto o archivo). Si querés cancelar, escribí *cancelar*."
 
     if estado.get("paso") == "doc_post":
         if mensaje.strip() == "1":
@@ -487,7 +553,12 @@ def responder(mensaje, numero):
                     "Recordá que *Atlas* está disponible las 24hs para lo que necesites.\n"
                     "¡Hasta la próxima aventura! 🌍")
         else:
-            return "Por favor respondé *1*, *2* o *3*."
+            intentos = estado.get("intentos_doc_post", 0) + 1
+            if intentos >= 3:
+                conversaciones.pop(numero, None)
+                return "❌ Demasiados intentos. Escribí *menú* para empezar de nuevo."
+            conversaciones[numero] = {**estado, "intentos_doc_post": intentos}
+            return f"Por favor respondé *1*, *2* o *3*. — Te quedan *{3 - intentos} intentos*."
 
     if msg in ["hola", "buenas", "buenos dias", "buenas tardes", "buenas noches", "inicio", "menu", "menú", "start"]:
         return MENU
@@ -534,6 +605,16 @@ def webhook():
             return "OK", 200
         message = value["messages"][0]
         numero = message["from"]
+        msg_id = message.get("id")
+
+        if ya_procesado(msg_id):
+            print(f"Mensaje duplicado ignorado: {msg_id}")
+            return "OK", 200
+
+        if es_spam(numero):
+            print(f"Spam detectado, ignorando mensaje de {numero}")
+            return "OK", 200
+
         tipo = message.get("type")
         estado = conversaciones.get(numero, {})
         if tipo == "text":
