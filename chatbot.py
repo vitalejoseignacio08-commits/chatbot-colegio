@@ -32,6 +32,11 @@ VENTANA_SEGUNDOS = 10
 mensajes_procesados = OrderedDict()
 LIMITE_IDS_PROCESADOS = 500
 
+# Reservas temporales: bloquea un horario mientras un cliente lo está completando,
+# para que dos personas no puedan agendar la misma fecha/hora al mismo tiempo.
+reservas_temporales = {}  # numero -> {"fecha": str, "hora": str, "expira": timestamp}
+TTL_RESERVA_SEGUNDOS = 600  # 10 minutos
+
 def es_spam(numero):
     ahora = datetime.now().timestamp()
     timestamps = mensajes_recientes.get(numero, [])
@@ -48,6 +53,33 @@ def ya_procesado(msg_id):
     mensajes_procesados[msg_id] = True
     if len(mensajes_procesados) > LIMITE_IDS_PROCESADOS:
         mensajes_procesados.popitem(last=False)
+    return False
+
+def _limpiar_reservas_vencidas():
+    ahora = datetime.now().timestamp()
+    vencidas = [num for num, r in reservas_temporales.items() if r["expira"] < ahora]
+    for num in vencidas:
+        reservas_temporales.pop(num, None)
+
+def reservar_slot(numero, fecha_str, hora_str):
+    """Bloquea fecha_str/hora_str para 'numero' durante TTL_RESERVA_SEGUNDOS."""
+    _limpiar_reservas_vencidas()
+    reservas_temporales[numero] = {
+        "fecha": fecha_str,
+        "hora": hora_str,
+        "expira": datetime.now().timestamp() + TTL_RESERVA_SEGUNDOS,
+    }
+
+def liberar_slot(numero):
+    """Libera la reserva temporal de 'numero', si tenía alguna."""
+    reservas_temporales.pop(numero, None)
+
+def slot_reservado_por_otro(numero, fecha_str, hora_str):
+    """True si otro número (no 'numero') tiene reservada esa fecha/hora en este momento."""
+    _limpiar_reservas_vencidas()
+    for num, r in reservas_temporales.items():
+        if num != numero and r["fecha"] == fecha_str and r["hora"] == hora_str:
+            return True
     return False
 
 def get_credentials():
@@ -303,6 +335,7 @@ def responder(mensaje, numero):
     estado = conversaciones.get(numero, {})
 
     if msg in ["cancelar", "salir"] and estado.get("paso"):
+        liberar_slot(numero)
         conversaciones.pop(numero, None)
         return "❌ Operación cancelada. Escribí *menú* para empezar de nuevo."
 
@@ -395,10 +428,13 @@ def responder(mensaje, numero):
                     return "❌ Demasiados intentos. Escribí *menú* para empezar de nuevo."
                 conversaciones[numero] = {**estado, "intentos_hora": intentos}
                 return "❌ El horario debe terminar en 0 o 5. Ejemplo: *10:00*, *10:15*, *10:30*. Intentá de nuevo."
+            if slot_reservado_por_otro(numero, estado["fecha"], mensaje.strip()):
+                return "❌ Ese horario lo está reservando otra persona en este momento. Probá con otro horario."
             disponible, proximos = verificar_disponibilidad(estado["fecha"], mensaje.strip())
             if not disponible:
                 proximos_txt = "\n".join([f"🟢 {h}" for h in proximos])
                 return f"❌ Ese horario ya está reservado. Los próximos horarios disponibles son:\n{proximos_txt}\n\nEscribí el horario que preferís."
+            reservar_slot(numero, estado["fecha"], mensaje.strip())
             conversaciones[numero] = {**estado, "paso": "cita_email", "hora": mensaje.strip()}
             return "📧 ¿Cuál es tu email?\nEscribilo así: *nombreapellido@gmail.com*"
         except:
@@ -418,6 +454,7 @@ def responder(mensaje, numero):
         else:
             intentos += 1
             if intentos >= 3:
+                liberar_slot(numero)
                 conversaciones.pop(numero, None)
                 return "Demasiados intentos. Escribi *menu* para empezar de nuevo."
             conversaciones[numero] = {**estado, "paso": "cita_email", "intentos_email": intentos}
@@ -451,8 +488,18 @@ def responder(mensaje, numero):
             sucursal = estado.get("sucursal", "Monte Buey")
             email = estado.get("email", "")
             motivo = estado.get("motivo", "")
-            conversaciones.pop(numero, None)
+            # Re-chequeo final: por si el horario se ocupó mientras completaba los datos
+            disponible, proximos = verificar_disponibilidad(fecha, hora)
+            if not disponible:
+                liberar_slot(numero)
+                conversaciones.pop(numero, None)
+                proximos_txt = "\n".join([f"🟢 {h}" for h in proximos])
+                return (f"❌ Justo se ocupó ese horario mientras completabas los datos.\n\n"
+                        f"Horarios cercanos disponibles ese día:\n{proximos_txt}\n\n"
+                        f"Escribí *menú* para volver a agendar.")
             exito = agendar_cita(nombre, fecha, motivo, telefono, sucursal, hora, email)
+            liberar_slot(numero)
+            conversaciones.pop(numero, None)
             if exito:
                 return (f"✅ ¡Listo! Tu consulta quedó agendada 🎉\n\n"
                         f"Nombre: {nombre}\n"
@@ -466,6 +513,7 @@ def responder(mensaje, numero):
             else:
                 return "❌ Hubo un error al agendar. Intentá de nuevo o contactanos directamente."
         else:
+            liberar_slot(numero)
             conversaciones.pop(numero, None)
             return "❌ Consulta cancelada. Escribí *menú* para empezar de nuevo."
 

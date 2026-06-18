@@ -26,6 +26,7 @@ import chatbot
 
 
 NUMERO = "5493467000111"
+NUMERO2 = "5493467000222"
 
 
 @pytest.fixture(autouse=True)
@@ -36,11 +37,13 @@ def limpiar_estado():
     chatbot.mensajes_recientes.clear()
     chatbot.mensajes_procesados.clear()
     chatbot.eventos_notificados.clear()
+    chatbot.reservas_temporales.clear()
     yield
     chatbot.conversaciones.clear()
     chatbot.mensajes_recientes.clear()
     chatbot.mensajes_procesados.clear()
     chatbot.eventos_notificados.clear()
+    chatbot.reservas_temporales.clear()
 
 
 def _proximo_dia_habil():
@@ -294,6 +297,96 @@ def test_cita_confirmar_no_cancela(monkeypatch):
     respuesta = chatbot.responder("NO", NUMERO)
     assert "cancelada" in respuesta.lower()
     assert NUMERO not in chatbot.conversaciones
+
+
+# ============================================================
+# RESERVA TEMPORAL DE HORARIO (evita que dos personas agenden
+# el mismo horario mientras una está completando los datos)
+# ============================================================
+
+def test_reservar_y_liberar_slot_directamente():
+    chatbot.reservar_slot(NUMERO, "20/06/2026", "14:00")
+    assert chatbot.slot_reservado_por_otro(NUMERO2, "20/06/2026", "14:00") is True
+    # un número no se bloquea a sí mismo
+    assert chatbot.slot_reservado_por_otro(NUMERO, "20/06/2026", "14:00") is False
+    chatbot.liberar_slot(NUMERO)
+    assert chatbot.slot_reservado_por_otro(NUMERO2, "20/06/2026", "14:00") is False
+
+
+def test_reserva_vencida_no_bloquea():
+    chatbot.reservar_slot(NUMERO, "20/06/2026", "14:00")
+    chatbot.reservas_temporales[NUMERO]["expira"] = datetime.now().timestamp() - 1
+    assert chatbot.slot_reservado_por_otro(NUMERO2, "20/06/2026", "14:00") is False
+
+
+def test_elegir_hora_bloquea_ese_horario_para_otro_numero(monkeypatch):
+    monkeypatch.setattr(chatbot, "verificar_disponibilidad", lambda f, h: (True, []))
+    _avanzar_a_hora(NUMERO)
+    chatbot.responder("14:00", NUMERO)
+    assert chatbot.conversaciones[NUMERO]["paso"] == "cita_email"
+
+    _avanzar_a_hora(NUMERO2)
+    respuesta = chatbot.responder("14:00", NUMERO2)
+    assert "está reservando otra persona" in respuesta
+    assert chatbot.conversaciones[NUMERO2]["paso"] == "cita_hora"
+
+
+def test_cancelar_libera_la_reserva_para_otro_numero(monkeypatch):
+    monkeypatch.setattr(chatbot, "verificar_disponibilidad", lambda f, h: (True, []))
+    _avanzar_a_hora(NUMERO)
+    chatbot.responder("14:00", NUMERO)
+    chatbot.responder("cancelar", NUMERO)
+
+    _avanzar_a_hora(NUMERO2)
+    respuesta = chatbot.responder("14:00", NUMERO2)
+    assert chatbot.conversaciones[NUMERO2]["paso"] == "cita_email"
+    assert "está reservando otra persona" not in respuesta
+
+
+def test_email_resetea_tras_3_intentos_libera_la_reserva(monkeypatch):
+    _avanzar_a_email(NUMERO, monkeypatch)
+    chatbot.responder("noesemail", NUMERO)
+    chatbot.responder("tampoco", NUMERO)
+    chatbot.responder("nada", NUMERO)
+    assert NUMERO not in chatbot.reservas_temporales
+
+    _avanzar_a_hora(NUMERO2)
+    respuesta = chatbot.responder("14:00", NUMERO2)
+    assert chatbot.conversaciones[NUMERO2]["paso"] == "cita_email"
+
+
+def test_confirmar_no_libera_la_reserva(monkeypatch):
+    _avanzar_a_confirmar(NUMERO, monkeypatch)
+    chatbot.responder("NO", NUMERO)
+    assert NUMERO not in chatbot.reservas_temporales
+
+    _avanzar_a_hora(NUMERO2)
+    respuesta = chatbot.responder("14:00", NUMERO2)
+    assert chatbot.conversaciones[NUMERO2]["paso"] == "cita_email"
+
+
+def test_confirmar_si_libera_la_reserva(monkeypatch):
+    _avanzar_a_confirmar(NUMERO, monkeypatch)
+    monkeypatch.setattr(chatbot, "agendar_cita", lambda *a, **k: True)
+    chatbot.responder("SI", NUMERO)
+    assert NUMERO not in chatbot.reservas_temporales
+
+
+def test_confirmar_si_revalida_disponibilidad_antes_de_agendar(monkeypatch):
+    _avanzar_a_motivo(NUMERO, monkeypatch=monkeypatch)
+    chatbot.responder("Viaje a Europa", NUMERO)
+    assert chatbot.conversaciones[NUMERO]["paso"] == "cita_confirmar"
+
+    # mientras completaba los datos, ese horario se ocupó
+    monkeypatch.setattr(
+        chatbot, "verificar_disponibilidad",
+        lambda f, h: (False, ["15:00", "15:30"])
+    )
+    respuesta = chatbot.responder("SI", NUMERO)
+    assert "se ocupó" in respuesta.lower()
+    assert "15:00" in respuesta
+    assert NUMERO not in chatbot.conversaciones
+    assert NUMERO not in chatbot.reservas_temporales
 
 
 # ============================================================
