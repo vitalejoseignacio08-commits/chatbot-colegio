@@ -9,6 +9,7 @@ import os
 import io
 import requests
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 app = Flask(__name__)
 
@@ -105,12 +106,12 @@ def loguear_consulta(numero, opcion):
     """Agrega una fila al Sheet de métricas: Fecha, Hora, Numero, Opcion elegida."""
     try:
         service = get_sheets_service()
-        ahora = datetime.now()
+        ahora = datetime.now(ZoneInfo("America/Argentina/Buenos_Aires"))
         fila = [[ahora.strftime("%d/%m/%Y"), ahora.strftime("%H:%M"), formatear_numero(numero), opcion]]
         service.spreadsheets().values().append(
             spreadsheetId=SHEET_ID,
             range="A:D",
-            valueInputOption="USER_ENTERED",
+            valueInputOption="RAW",
             insertDataOption="INSERT_ROWS",
             body={"values": fila}
         ).execute()

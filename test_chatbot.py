@@ -611,6 +611,7 @@ def test_loguear_consulta_arma_la_fila_correctamente(monkeypatch):
         def append(self, spreadsheetId, range, valueInputOption, insertDataOption, body):
             llamadas["spreadsheetId"] = spreadsheetId
             llamadas["range"] = range
+            llamadas["valueInputOption"] = valueInputOption
             llamadas["body"] = body
             return FakeExec()
 
@@ -629,6 +630,42 @@ def test_loguear_consulta_arma_la_fila_correctamente(monkeypatch):
     fila = llamadas["body"]["values"][0]
     assert fila[2] == chatbot.formatear_numero(NUMERO)
     assert fila[3] == "Agendar una consulta"
+    # RAW evita que Sheets interprete el "+" del numero como inicio de formula
+    # (con USER_ENTERED el numero aparecia como #ERROR! en la hoja real).
+    assert llamadas["valueInputOption"] == "RAW"
+
+
+def test_loguear_consulta_usa_hora_de_argentina(monkeypatch):
+    """El servidor (Railway) corre en UTC; sin esto la hora logueada
+    aparecia corrida (bug real observado en produccion)."""
+    llamadas = {}
+
+    class FakeExec:
+        def execute(self):
+            return {}
+
+    class FakeValues:
+        def append(self, spreadsheetId, range, valueInputOption, insertDataOption, body):
+            llamadas["body"] = body
+            return FakeExec()
+
+    class FakeSpreadsheets:
+        def values(self):
+            return FakeValues()
+
+    class FakeService:
+        def spreadsheets(self):
+            return FakeSpreadsheets()
+
+    monkeypatch.setattr(chatbot, "get_sheets_service", lambda: FakeService())
+    monkeypatch.setattr(chatbot, "loguear_consulta", LOGUEAR_CONSULTA_REAL)
+    chatbot.loguear_consulta(NUMERO, "Horarios de atención")
+
+    from zoneinfo import ZoneInfo
+    esperado = datetime.now(ZoneInfo("America/Argentina/Buenos_Aires"))
+    fila = llamadas["body"]["values"][0]
+    assert fila[0] == esperado.strftime("%d/%m/%Y")
+    assert fila[1] == esperado.strftime("%H:%M")
 
 
 # ============================================================
