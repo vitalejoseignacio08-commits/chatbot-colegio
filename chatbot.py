@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 app = Flask(__name__)
 
 DRIVE_FOLDER_ID = "1_o3PbEP9KOaJ4kN-0eu3j3JyKUgG0vSj"
+SHEET_ID = "1QqcnKBut02VRa-3jBJ45V3NLDhjADSoblA6EUORNhfg"
 PHONE_NUMBER_ID = os.environ.get("META_PHONE_NUMBER_ID", "1064536793419567")
 META_TOKEN = os.environ.get("META_ACCESS_TOKEN")
 VERIFY_TOKEN = os.environ.get("META_VERIFY_TOKEN", "colegio_agrotecnico_bot")
@@ -96,6 +97,25 @@ def get_drive_service():
 
 def get_calendar_service():
     return build("calendar", "v3", credentials=get_credentials())
+
+def get_sheets_service():
+    return build("sheets", "v4", credentials=get_credentials())
+
+def loguear_consulta(numero, opcion):
+    """Agrega una fila al Sheet de métricas: Fecha, Hora, Numero, Opcion elegida."""
+    try:
+        service = get_sheets_service()
+        ahora = datetime.now()
+        fila = [[ahora.strftime("%d/%m/%Y"), ahora.strftime("%H:%M"), formatear_numero(numero), opcion]]
+        service.spreadsheets().values().append(
+            spreadsheetId=SHEET_ID,
+            range="A:D",
+            valueInputOption="USER_ENTERED",
+            insertDataOption="INSERT_ROWS",
+            body={"values": fila}
+        ).execute()
+    except Exception as e:
+        print(f"Error logueando consulta: {e}")
 
 def enviar_mensaje(numero, texto):
     url = f"https://graph.facebook.com/v25.0/{PHONE_NUMBER_ID}/messages"
@@ -611,19 +631,23 @@ def responder(mensaje, numero):
     if msg in ["hola", "buenas", "buenos dias", "buenas tardes", "buenas noches", "inicio", "menu", "menú", "start"]:
         return MENU
     elif msg == "2":
+        loguear_consulta(numero, "Horarios de atención")
         return f"🕐 ¡Buena pregunta! Estamos disponibles de *{HORARIO_ATENCION}* en nuestras dos sucursales 📍"
     elif msg == "3":
+        loguear_consulta(numero, "Agendar una consulta")
         conversaciones[numero] = {"paso": "cita_sucursal"}
         return ("¡Genial, vamos a planear algo juntos! 🗓️✨\n\n"
                 "Primero, ¿en qué sucursal preferís atenderte?\n\n"
                 "1️⃣ 📍 Monte Buey\n"
                 "2️⃣ 📍 Justiniano Posse")
     elif msg == "4":
+        loguear_consulta(numero, "Enviar documentación")
         conversaciones[numero] = {"paso": "doc_menu"}
         return ("📁 ¿Qué querés hacer?\n\n"
                 "1️⃣ Subir documentación\n"
                 "2️⃣ Ver mis documentos guardados")
     elif msg == "5":
+        loguear_consulta(numero, "Emergencia durante un viaje")
         return (f"🚨 *¿Estás en una emergencia durante tu viaje?*\n\n"
                 f"Contactá ahora a nuestra línea de guardia:\n"
                 f"📞 *{NUMERO_GUARDIA}*\n\n"

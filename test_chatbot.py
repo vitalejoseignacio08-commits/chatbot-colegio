@@ -28,9 +28,13 @@ import chatbot
 NUMERO = "5493467000111"
 NUMERO2 = "5493467000222"
 
+# Referencia a la función real, capturada antes de que el fixture autouse
+# la reemplace por un no-op en cada test (ver limpiar_estado más abajo).
+LOGUEAR_CONSULTA_REAL = chatbot.loguear_consulta
+
 
 @pytest.fixture(autouse=True)
-def limpiar_estado():
+def limpiar_estado(monkeypatch):
     """Resetea todo el estado global del bot antes y después de cada test,
     para que un test no contamine al siguiente."""
     chatbot.conversaciones.clear()
@@ -38,6 +42,10 @@ def limpiar_estado():
     chatbot.mensajes_procesados.clear()
     chatbot.eventos_notificados.clear()
     chatbot.reservas_temporales.clear()
+    # Por defecto, loguear_consulta no hace nada en los tests (evita llamadas
+    # de red reales a Google Sheets). Los tests de la sección de métricas
+    # lo sobreescriben para verificar que se llama con los datos correctos.
+    monkeypatch.setattr(chatbot, "loguear_consulta", lambda *a, **k: None)
     yield
     chatbot.conversaciones.clear()
     chatbot.mensajes_recientes.clear()
@@ -539,6 +547,88 @@ def test_doc_post_invalido_resetea_tras_3_intentos():
     respuesta = chatbot.responder("x", NUMERO)
     assert "demasiados intentos" in respuesta.lower()
     assert NUMERO not in chatbot.conversaciones
+
+
+# ============================================================
+# MÉTRICAS: LOGUEO DE CONSULTAS A GOOGLE SHEETS
+# ============================================================
+
+def test_opcion_2_loguea_consulta(monkeypatch):
+    registros = []
+    monkeypatch.setattr(chatbot, "loguear_consulta", lambda n, o: registros.append((n, o)))
+    chatbot.responder("2", NUMERO)
+    assert registros == [(NUMERO, "Horarios de atención")]
+
+
+def test_opcion_3_loguea_consulta(monkeypatch):
+    registros = []
+    monkeypatch.setattr(chatbot, "loguear_consulta", lambda n, o: registros.append((n, o)))
+    chatbot.responder("3", NUMERO)
+    assert registros == [(NUMERO, "Agendar una consulta")]
+
+
+def test_opcion_4_loguea_consulta(monkeypatch):
+    registros = []
+    monkeypatch.setattr(chatbot, "loguear_consulta", lambda n, o: registros.append((n, o)))
+    chatbot.responder("4", NUMERO)
+    assert registros == [(NUMERO, "Enviar documentación")]
+
+
+def test_opcion_5_loguea_consulta(monkeypatch):
+    registros = []
+    monkeypatch.setattr(chatbot, "loguear_consulta", lambda n, o: registros.append((n, o)))
+    chatbot.responder("5", NUMERO)
+    assert registros == [(NUMERO, "Emergencia durante un viaje")]
+
+
+def test_menu_y_mensaje_no_reconocido_no_loguean(monkeypatch):
+    registros = []
+    monkeypatch.setattr(chatbot, "loguear_consulta", lambda n, o: registros.append((n, o)))
+    chatbot.responder("hola", NUMERO)
+    chatbot.responder("asdkjaslkdj", NUMERO)
+    assert registros == []
+
+
+def test_loguear_consulta_no_rompe_si_falla_sheets(monkeypatch):
+    """Si la API de Sheets falla (ej. permisos insuficientes), el bot no debe
+    romperse: el error se captura y la conversación sigue normalmente."""
+    def falla(*a, **k):
+        raise Exception("Permiso insuficiente")
+    monkeypatch.setattr(chatbot, "get_sheets_service", falla)
+    monkeypatch.setattr(chatbot, "loguear_consulta", LOGUEAR_CONSULTA_REAL)
+    resultado = chatbot.loguear_consulta(NUMERO, "Horarios de atención")
+    assert resultado is None  # no lanza excepción
+
+
+def test_loguear_consulta_arma_la_fila_correctamente(monkeypatch):
+    llamadas = {}
+
+    class FakeExec:
+        def execute(self):
+            return {}
+
+    class FakeValues:
+        def append(self, spreadsheetId, range, valueInputOption, insertDataOption, body):
+            llamadas["spreadsheetId"] = spreadsheetId
+            llamadas["range"] = range
+            llamadas["body"] = body
+            return FakeExec()
+
+    class FakeSpreadsheets:
+        def values(self):
+            return FakeValues()
+
+    class FakeService:
+        def spreadsheets(self):
+            return FakeSpreadsheets()
+
+    monkeypatch.setattr(chatbot, "get_sheets_service", lambda: FakeService())
+    monkeypatch.setattr(chatbot, "loguear_consulta", LOGUEAR_CONSULTA_REAL)
+    chatbot.loguear_consulta(NUMERO, "Agendar una consulta")
+    assert llamadas["spreadsheetId"] == chatbot.SHEET_ID
+    fila = llamadas["body"]["values"][0]
+    assert fila[2] == chatbot.formatear_numero(NUMERO)
+    assert fila[3] == "Agendar una consulta"
 
 
 # ============================================================
