@@ -797,6 +797,23 @@ def _payload_documento(numero, msg_id="wamid.DOC1"):
     }
 
 
+def _payload_audio(numero, msg_id="wamid.AUDIO1"):
+    return {
+        "entry": [{
+            "changes": [{
+                "value": {
+                    "messages": [{
+                        "from": numero,
+                        "id": msg_id,
+                        "type": "audio",
+                        "audio": {"id": "media999", "mime_type": "audio/ogg"},
+                    }]
+                }
+            }]
+        }]
+    }
+
+
 def test_webhook_verificacion_con_token_correcto():
     client = chatbot.app.test_client()
     resp = client.get("/webhook", query_string={
@@ -848,13 +865,22 @@ def test_webhook_ignora_spam(monkeypatch):
     assert len(enviados) == chatbot.LIMITE_MENSAJES
 
 
-def test_webhook_documento_sin_haber_pasado_por_opcion_4_avisa(monkeypatch):
+def test_webhook_documento_sin_haber_pasado_por_opcion_avisa(monkeypatch):
     enviados = []
     monkeypatch.setattr(chatbot, "enviar_mensaje", lambda n, t: enviados.append((n, t)))
     client = chatbot.app.test_client()
     resp = client.post("/webhook", json=_payload_documento(NUMERO))
     assert resp.status_code == 200
-    assert "opción *4*" in enviados[0][1]
+    assert "opción *3*" in enviados[0][1]
+
+
+def test_webhook_audio_pide_escribir_por_texto(monkeypatch):
+    enviados = []
+    monkeypatch.setattr(chatbot, "enviar_mensaje", lambda n, t: enviados.append((n, t)))
+    client = chatbot.app.test_client()
+    resp = client.post("/webhook", json=_payload_audio(NUMERO))
+    assert resp.status_code == 200
+    assert enviados[0] == (NUMERO, chatbot.MENSAJE_SOLO_TEXTO)
 
 
 def test_webhook_documento_con_estado_doc_esperar_lo_sube(monkeypatch):

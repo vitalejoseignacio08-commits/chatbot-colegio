@@ -363,6 +363,11 @@ MENSAJE_AYUDA = """¡Por supuesto! 🙋 Te paso los contactos directos de nuestr
 
 Escribinos y te van a responder a la brevedad."""
 
+MENSAJE_SOLO_TEXTO = """🎙️ Por ahora no puedo escuchar audios ni ver ese tipo de mensaje.
+
+Escribime tu consulta por mensaje de texto y te ayudo enseguida 😊
+Si querés ver las opciones, escribí *MENU*."""
+
 # Palabras clave que reconoce el menú principal (además del número).
 # Se comparan ya normalizadas (sin acentos, en minúscula).
 PALABRAS_MENU = {"hola", "buenas", "buenos dias", "buenas tardes", "buenas noches",
@@ -745,7 +750,10 @@ def webhook():
                     conversaciones.pop(numero, None)
                     enviar_mensaje(numero, "❌ Hubo un error al guardar el documento. Intentá de nuevo.")
             else:
-                enviar_mensaje(numero, "👤 Para enviar documentación usá la opción *4* del menú primero, así lo guardamos en tu carpeta personal.")
+                enviar_mensaje(numero, "👤 Para enviar documentación usá la opción *3* del menú primero, así lo guardamos en tu carpeta personal.")
+        else:
+            # Audio, video, sticker, ubicación, contacto, etc.: el bot no los procesa.
+            enviar_mensaje(numero, MENSAJE_SOLO_TEXTO)
     except Exception as e:
         print(f"Error procesando mensaje: {e}")
     return "OK", 200
