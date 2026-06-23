@@ -74,18 +74,70 @@ def test_variantes_de_saludo_muestran_menu():
         assert chatbot.responder(saludo, NUMERO) == chatbot.MENU
 
 
-def test_mensaje_no_reconocido_muestra_menu():
-    assert chatbot.responder("asdkjaslkdj", NUMERO) == chatbot.MENU
+def test_mensaje_no_reconocido_muestra_no_entendido():
+    assert chatbot.responder("asdkjaslkdj", NUMERO) == chatbot.MENSAJE_NO_ENTENDIDO
 
 
 def test_opcion_horarios():
-    respuesta = chatbot.responder("2", NUMERO)
+    respuesta = chatbot.responder("1", NUMERO)
     assert "10:00 a 20:00" in respuesta
 
 
 def test_opcion_emergencia_da_numero_de_guardia():
-    respuesta = chatbot.responder("5", NUMERO)
+    respuesta = chatbot.responder("4", NUMERO)
     assert chatbot.NUMERO_GUARDIA in respuesta
+
+
+# ============================================================
+# RECONOCIMIENTO DE PALABRAS CLAVE Y AYUDA (usabilidad)
+# ============================================================
+
+def test_palabra_horarios_funciona_como_opcion_1():
+    respuesta = chatbot.responder("horarios", NUMERO)
+    assert "10:00 a 20:00" in respuesta
+
+
+def test_palabra_agendar_inicia_flujo_de_cita():
+    respuesta = chatbot.responder("agendar", NUMERO)
+    assert "sucursal" in respuesta.lower()
+    assert chatbot.conversaciones[NUMERO]["paso"] == "cita_sucursal"
+
+
+def test_palabra_documentos_inicia_flujo_de_documentacion():
+    respuesta = chatbot.responder("documentos", NUMERO)
+    assert "Subir documentación" in respuesta
+    assert chatbot.conversaciones[NUMERO]["paso"] == "doc_menu"
+
+
+def test_palabra_emergencia_da_numero_de_guardia():
+    respuesta = chatbot.responder("emergencia", NUMERO)
+    assert chatbot.NUMERO_GUARDIA in respuesta
+
+
+def test_palabras_clave_ignoran_mayusculas_y_acentos():
+    # "Documentación" con mayúscula y acento debe entenderse igual.
+    respuesta = chatbot.responder("Documentación", NUMERO)
+    assert chatbot.conversaciones[NUMERO]["paso"] == "doc_menu"
+
+
+def test_ayuda_devuelve_contactos_humanos():
+    respuesta = chatbot.responder("ayuda", NUMERO)
+    assert "Monte Buey" in respuesta
+    assert "Justiniano Posse" in respuesta
+    assert respuesta == chatbot.MENSAJE_AYUDA
+
+
+def test_ayuda_funciona_a_mitad_de_un_flujo():
+    # Aunque el usuario esté agendando, pedir "ayuda" siempre lo deriva a una persona.
+    chatbot.responder("agendar", NUMERO)
+    chatbot.responder("1", NUMERO)  # sucursal Monte Buey -> paso cita_nombre
+    respuesta = chatbot.responder("persona", NUMERO)
+    assert respuesta == chatbot.MENSAJE_AYUDA
+
+
+def test_numero_invalido_del_menu_muestra_no_entendido():
+    # El "5" ya no es una opción válida (el menú ahora es 1-4).
+    assert chatbot.responder("5", NUMERO) == chatbot.MENSAJE_NO_ENTENDIDO
 
 
 # ============================================================
@@ -93,26 +145,26 @@ def test_opcion_emergencia_da_numero_de_guardia():
 # ============================================================
 
 def test_cita_inicia_pidiendo_sucursal():
-    respuesta = chatbot.responder("3", NUMERO)
+    respuesta = chatbot.responder("2", NUMERO)
     assert "sucursal" in respuesta.lower()
     assert chatbot.conversaciones[NUMERO]["paso"] == "cita_sucursal"
 
 
 def test_cita_elige_monte_buey():
-    chatbot.responder("3", NUMERO)
+    chatbot.responder("2", NUMERO)
     chatbot.responder("1", NUMERO)
     assert chatbot.conversaciones[NUMERO]["sucursal"] == "Monte Buey"
     assert chatbot.conversaciones[NUMERO]["paso"] == "cita_nombre"
 
 
 def test_cita_elige_justiniano_posse():
-    chatbot.responder("3", NUMERO)
+    chatbot.responder("2", NUMERO)
     chatbot.responder("2", NUMERO)
     assert chatbot.conversaciones[NUMERO]["sucursal"] == "Justiniano Posse"
 
 
 def test_cita_sucursal_invalida_resetea_tras_3_intentos():
-    chatbot.responder("3", NUMERO)
+    chatbot.responder("2", NUMERO)
     chatbot.responder("x", NUMERO)
     chatbot.responder("x", NUMERO)
     respuesta = chatbot.responder("x", NUMERO)
@@ -121,13 +173,13 @@ def test_cita_sucursal_invalida_resetea_tras_3_intentos():
 
 
 def _avanzar_a_telefono(numero=NUMERO):
-    chatbot.responder("3", numero)
+    chatbot.responder("2", numero)
     chatbot.responder("1", numero)
     chatbot.responder("Juan Perez", numero)
 
 
 def test_cita_nombre_pide_telefono():
-    chatbot.responder("3", NUMERO)
+    chatbot.responder("2", NUMERO)
     chatbot.responder("1", NUMERO)
     respuesta = chatbot.responder("Juan Perez", NUMERO)
     assert "whatsapp" in respuesta.lower()
@@ -402,7 +454,7 @@ def test_confirmar_si_revalida_disponibilidad_antes_de_agendar(monkeypatch):
 # ============================================================
 
 def test_cancelar_funciona_a_mitad_del_flujo_de_cita():
-    chatbot.responder("3", NUMERO)
+    chatbot.responder("2", NUMERO)
     chatbot.responder("1", NUMERO)
     respuesta = chatbot.responder("cancelar", NUMERO)
     assert "cancelada" in respuesta.lower()
@@ -410,7 +462,7 @@ def test_cancelar_funciona_a_mitad_del_flujo_de_cita():
 
 
 def test_salir_funciona_a_mitad_del_flujo_de_documentacion():
-    chatbot.responder("4", NUMERO)
+    chatbot.responder("3", NUMERO)
     respuesta = chatbot.responder("salir", NUMERO)
     assert "cancelada" in respuesta.lower()
     assert NUMERO not in chatbot.conversaciones
@@ -421,13 +473,13 @@ def test_salir_funciona_a_mitad_del_flujo_de_documentacion():
 # ============================================================
 
 def test_doc_inicia_menu():
-    respuesta = chatbot.responder("4", NUMERO)
+    respuesta = chatbot.responder("3", NUMERO)
     assert "Subir documentación" in respuesta
     assert chatbot.conversaciones[NUMERO]["paso"] == "doc_menu"
 
 
 def test_doc_subir_con_carpeta_existente_salta_pedido_de_nombre(monkeypatch):
-    chatbot.responder("4", NUMERO)
+    chatbot.responder("3", NUMERO)
     monkeypatch.setattr(chatbot, "buscar_carpeta_existente", lambda n: "ID_CARPETA_FALSA")
     respuesta = chatbot.responder("1", NUMERO)
     assert chatbot.conversaciones[NUMERO]["paso"] == "doc_tipo"
@@ -435,7 +487,7 @@ def test_doc_subir_con_carpeta_existente_salta_pedido_de_nombre(monkeypatch):
 
 
 def test_doc_subir_sin_carpeta_pide_nombre(monkeypatch):
-    chatbot.responder("4", NUMERO)
+    chatbot.responder("3", NUMERO)
     monkeypatch.setattr(chatbot, "buscar_carpeta_existente", lambda n: None)
     respuesta = chatbot.responder("1", NUMERO)
     assert chatbot.conversaciones[NUMERO]["paso"] == "doc_nombre"
@@ -443,7 +495,7 @@ def test_doc_subir_sin_carpeta_pide_nombre(monkeypatch):
 
 
 def test_doc_ver_documentos_con_archivos(monkeypatch):
-    chatbot.responder("4", NUMERO)
+    chatbot.responder("3", NUMERO)
     monkeypatch.setattr(chatbot, "listar_documentos", lambda n: {"Pasaporte": 1, "DNI": 3})
     respuesta = chatbot.responder("2", NUMERO)
     assert "Pasaporte: 1" in respuesta
@@ -451,7 +503,7 @@ def test_doc_ver_documentos_con_archivos(monkeypatch):
 
 
 def test_doc_ver_documentos_vacio_ofrece_subir(monkeypatch):
-    chatbot.responder("4", NUMERO)
+    chatbot.responder("3", NUMERO)
     monkeypatch.setattr(chatbot, "listar_documentos", lambda n: {})
     respuesta = chatbot.responder("2", NUMERO)
     assert "no tenés documentos" in respuesta.lower()
@@ -459,7 +511,7 @@ def test_doc_ver_documentos_vacio_ofrece_subir(monkeypatch):
 
 
 def test_doc_menu_invalido_resetea_tras_3_intentos():
-    chatbot.responder("4", NUMERO)
+    chatbot.responder("3", NUMERO)
     chatbot.responder("x", NUMERO)
     chatbot.responder("x", NUMERO)
     respuesta = chatbot.responder("x", NUMERO)
@@ -553,32 +605,46 @@ def test_doc_post_invalido_resetea_tras_3_intentos():
 # MÉTRICAS: LOGUEO DE CONSULTAS A GOOGLE SHEETS
 # ============================================================
 
-def test_opcion_2_loguea_consulta(monkeypatch):
+def test_opcion_horarios_loguea_consulta(monkeypatch):
     registros = []
     monkeypatch.setattr(chatbot, "loguear_consulta", lambda n, o: registros.append((n, o)))
-    chatbot.responder("2", NUMERO)
+    chatbot.responder("1", NUMERO)
     assert registros == [(NUMERO, "Horarios de atención")]
 
 
-def test_opcion_3_loguea_consulta(monkeypatch):
+def test_opcion_agendar_loguea_consulta(monkeypatch):
     registros = []
     monkeypatch.setattr(chatbot, "loguear_consulta", lambda n, o: registros.append((n, o)))
-    chatbot.responder("3", NUMERO)
+    chatbot.responder("2", NUMERO)
     assert registros == [(NUMERO, "Agendar una consulta")]
 
 
-def test_opcion_4_loguea_consulta(monkeypatch):
+def test_opcion_documentos_loguea_consulta(monkeypatch):
     registros = []
     monkeypatch.setattr(chatbot, "loguear_consulta", lambda n, o: registros.append((n, o)))
-    chatbot.responder("4", NUMERO)
+    chatbot.responder("3", NUMERO)
     assert registros == [(NUMERO, "Enviar documentación")]
 
 
-def test_opcion_5_loguea_consulta(monkeypatch):
+def test_opcion_emergencia_loguea_consulta(monkeypatch):
     registros = []
     monkeypatch.setattr(chatbot, "loguear_consulta", lambda n, o: registros.append((n, o)))
-    chatbot.responder("5", NUMERO)
+    chatbot.responder("4", NUMERO)
     assert registros == [(NUMERO, "Emergencia durante un viaje")]
+
+
+def test_palabra_clave_tambien_loguea_consulta(monkeypatch):
+    registros = []
+    monkeypatch.setattr(chatbot, "loguear_consulta", lambda n, o: registros.append((n, o)))
+    chatbot.responder("horarios", NUMERO)
+    assert registros == [(NUMERO, "Horarios de atención")]
+
+
+def test_ayuda_no_loguea_consulta(monkeypatch):
+    registros = []
+    monkeypatch.setattr(chatbot, "loguear_consulta", lambda n, o: registros.append((n, o)))
+    chatbot.responder("ayuda", NUMERO)
+    assert registros == []
 
 
 def test_menu_y_mensaje_no_reconocido_no_loguean(monkeypatch):

@@ -10,6 +10,7 @@ import io
 import requests
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+import unicodedata
 
 app = Flask(__name__)
 
@@ -341,24 +342,55 @@ def agendar_cita(nombre, fecha_str, motivo, telefono, sucursal, hora_str="10:00"
 
 MENU = """¡Hola! 👋✈️ Soy *Atlas*, el asistente virtual de *Gen Viajero* 🌍
 
-Estoy acá para ayudarte a planear tu próxima aventura. ¿En qué puedo ayudarte?
+Contame qué necesitás. Podés escribir el *número* o la *palabra*:
 
-2️⃣ 🕐 Horarios de atención
-3️⃣ 📅 Agendar una consulta
-4️⃣ 📁 Enviar documentación
-5️⃣ 🚨 Emergencia durante un viaje
+1️⃣ 🕐 Horarios de atención → escribí *horarios*
+2️⃣ 📅 Agendar una consulta → escribí *agendar*
+3️⃣ 📁 Enviar documentación → escribí *documentos*
+4️⃣ 🚨 Emergencia en viaje → escribí *emergencia*
 
-*Respondé con el número de tu consulta.*
-_(Soy un bot — para hablar con una persona, agendá una consulta 😊)_"""
+❓ Si no estás seguro, escribí *AYUDA* y te paso con una persona."""
+
+MENSAJE_NO_ENTENDIDO = """Perdón, no entendí ese mensaje 🙏
+
+Escribí *MENU* para ver las opciones de nuevo,
+o *AYUDA* si preferís hablar directamente con una persona del equipo."""
+
+MENSAJE_AYUDA = """¡Por supuesto! 🙋 Te paso los contactos directos de nuestro equipo:
+
+📍 Monte Buey: +54 3467 52-7532
+📍 Justiniano Posse: +54 9 3467 43-4284
+
+Escribinos y te van a responder a la brevedad."""
+
+# Palabras clave que reconoce el menú principal (además del número).
+# Se comparan ya normalizadas (sin acentos, en minúscula).
+PALABRAS_MENU = {"hola", "buenas", "buenos dias", "buenas tardes", "buenas noches",
+                 "inicio", "menu", "start", "empezar"}
+PALABRAS_HORARIOS = {"1", "horarios", "horario", "horarios de atencion", "horas"}
+PALABRAS_AGENDAR = {"2", "agendar", "agenda", "consulta", "consultar", "turno", "cita", "reservar"}
+PALABRAS_DOCUMENTOS = {"3", "documentos", "documento", "documentacion", "docs", "enviar documentacion"}
+PALABRAS_EMERGENCIA = {"4", "emergencia", "emergencias", "urgencia", "urgente"}
+PALABRAS_AYUDA = {"ayuda", "persona", "humano", "asesor", "operador", "hablar con una persona"}
+
+def normalizar_texto(texto):
+    """Pasa a minúscula, recorta espacios y quita acentos, para comparar palabras clave."""
+    t = unicodedata.normalize("NFD", texto.strip().lower())
+    return "".join(c for c in t if unicodedata.category(c) != "Mn")
 
 def responder(mensaje, numero):
     msg = mensaje.strip().lower()
+    msg_norm = normalizar_texto(mensaje)
     estado = conversaciones.get(numero, {})
 
     if msg in ["cancelar", "salir"] and estado.get("paso"):
         liberar_slot(numero)
         conversaciones.pop(numero, None)
         return "❌ Operación cancelada. Escribí *menú* para empezar de nuevo."
+
+    # AYUDA: salida a una persona, disponible en cualquier momento de la conversación.
+    if msg_norm in PALABRAS_AYUDA:
+        return MENSAJE_AYUDA
 
     if estado.get("paso") == "cita_sucursal":
         if mensaje.strip() == "1":
@@ -629,32 +661,32 @@ def responder(mensaje, numero):
             conversaciones[numero] = {**estado, "intentos_doc_post": intentos}
             return f"Por favor respondé *1*, *2* o *3*. — Te quedan *{3 - intentos} intentos*."
 
-    if msg in ["hola", "buenas", "buenos dias", "buenas tardes", "buenas noches", "inicio", "menu", "menú", "start"]:
+    if msg_norm in PALABRAS_MENU:
         return MENU
-    elif msg == "2":
+    elif msg_norm in PALABRAS_HORARIOS:
         loguear_consulta(numero, "Horarios de atención")
         return f"🕐 ¡Buena pregunta! Estamos disponibles de *{HORARIO_ATENCION}* en nuestras dos sucursales 📍"
-    elif msg == "3":
+    elif msg_norm in PALABRAS_AGENDAR:
         loguear_consulta(numero, "Agendar una consulta")
         conversaciones[numero] = {"paso": "cita_sucursal"}
         return ("¡Genial, vamos a planear algo juntos! 🗓️✨\n\n"
                 "Primero, ¿en qué sucursal preferís atenderte?\n\n"
                 "1️⃣ 📍 Monte Buey\n"
                 "2️⃣ 📍 Justiniano Posse")
-    elif msg == "4":
+    elif msg_norm in PALABRAS_DOCUMENTOS:
         loguear_consulta(numero, "Enviar documentación")
         conversaciones[numero] = {"paso": "doc_menu"}
         return ("📁 ¿Qué querés hacer?\n\n"
                 "1️⃣ Subir documentación\n"
                 "2️⃣ Ver mis documentos guardados")
-    elif msg == "5":
+    elif msg_norm in PALABRAS_EMERGENCIA:
         loguear_consulta(numero, "Emergencia durante un viaje")
         return (f"🚨 *¿Estás en una emergencia durante tu viaje?*\n\n"
                 f"Contactá ahora a nuestra línea de guardia:\n"
                 f"📞 *{NUMERO_GUARDIA}*\n\n"
                 f"¡Estamos para vos las 24hs! 💪")
     else:
-        return MENU
+        return MENSAJE_NO_ENTENDIDO
 
 @app.route("/webhook", methods=["GET"])
 def verificar_webhook():
