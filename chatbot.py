@@ -11,6 +11,7 @@ import requests
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import unicodedata
+import re
 
 app = Flask(__name__)
 
@@ -351,15 +352,17 @@ Contame qué necesitás. Podés escribir el *número* o la *palabra*:
 
 ❓ Si no estás seguro, escribí *AYUDA* y te paso con una persona."""
 
-MENSAJE_NO_ENTENDIDO = """Perdón, no entendí ese mensaje 🙏
+MENSAJE_DERIVAR = """🤔 No estoy seguro de cómo ayudarte con eso. Te paso con una persona del equipo:
 
-Escribí *MENU* para ver las opciones de nuevo,
-o *AYUDA* si preferís hablar directamente con una persona del equipo."""
+📍 Consultas Monte Buey: +54 3467 52-7532
+📍 Consultas Justiniano Posse: +54 9 3467 43-4284
+
+También podés escribir *MENU* para ver las opciones 😊"""
 
 MENSAJE_AYUDA = """¡Por supuesto! 🙋 Te paso los contactos directos de nuestro equipo:
 
-📍 Monte Buey: +54 3467 52-7532
-📍 Justiniano Posse: +54 9 3467 43-4284
+📍 Consultas Monte Buey: +54 3467 52-7532
+📍 Consultas Justiniano Posse: +54 9 3467 43-4284
 
 Escribinos y te van a responder a la brevedad."""
 
@@ -368,20 +371,64 @@ MENSAJE_SOLO_TEXTO = """🎙️ Por ahora no puedo escuchar audios ni ver ese ti
 Escribime tu consulta por mensaje de texto y te ayudo enseguida 😊
 Si querés ver las opciones, escribí *MENU*."""
 
-# Palabras clave que reconoce el menú principal (además del número).
-# Se comparan ya normalizadas (sin acentos, en minúscula).
-PALABRAS_MENU = {"hola", "buenas", "buenos dias", "buenas tardes", "buenas noches",
-                 "inicio", "menu", "start", "empezar"}
-PALABRAS_HORARIOS = {"1", "horarios", "horario", "horarios de atencion", "horas"}
-PALABRAS_AGENDAR = {"2", "agendar", "agenda", "consulta", "consultar", "turno", "cita", "reservar"}
-PALABRAS_DOCUMENTOS = {"3", "documentos", "documento", "documentacion", "docs", "enviar documentacion"}
-PALABRAS_EMERGENCIA = {"4", "emergencia", "emergencias", "urgencia", "urgente"}
-PALABRAS_AYUDA = {"ayuda", "persona", "humano", "asesor", "operador", "hablar con una persona"}
+# --- Detección de intención por palabras clave ---
+# El bot busca estas palabras (o frases) EN CUALQUIER PARTE del mensaje, ya
+# normalizado (minúscula, sin acentos). Si encuentra una, deriva a esa categoría.
+# Prioridad: emergencia > agendar > documentos > horarios > saludo (menú).
+# Las palabras se matchean como palabra completa; las frases como subcadena.
+
+PALABRAS_EMERGENCIA = {"emergencia", "emergencias", "urgencia", "urgente", "urgentes",
+    "problema", "problemas", "perdi", "perder", "perdido", "perdimos", "robaron", "robo",
+    "accidente", "varado", "varada", "varados", "atrapado", "atrapada", "cancelaron",
+    "cancelado", "cancelacion", "demora", "demorado", "socorro", "auxilio", "enfermo",
+    "enferma", "hospital"}
+FRASES_EMERGENCIA = {"perder vuelo", "perdi el vuelo", "perdi mi vuelo", "perdi el avion",
+    "perdi mi avion", "no puedo volver", "ayuda urgente", "quede varado", "me robaron"}
+
+PALABRAS_AGENDAR = {"agendar", "agenda", "agendo", "consulta", "consultar", "consultas",
+    "turno", "cita", "reservar", "reserva", "viaje", "viajar", "viajes", "vacaciones",
+    "presupuesto", "cotizar", "cotizacion", "paquete", "paquetes", "pasaje", "pasajes",
+    "vuelo", "vuelos", "crucero", "excursion", "precio", "precios", "info", "informacion",
+    "planear"}
+FRASES_AGENDAR = {"cuanto sale", "quiero viajar", "quiero ir"}
+
+PALABRAS_DOCUMENTOS = {"documento", "documentos", "documentacion", "pasaporte", "pasaportes",
+    "visa", "dni", "papeles", "papel", "subir", "adjuntar"}
+FRASES_DOCUMENTOS = {"mandar documento", "enviar documento", "mandar documentacion",
+    "enviar documentacion"}
+
+PALABRAS_HORARIOS = {"horario", "horarios", "hora", "horas", "atienden", "atencion",
+    "abren", "abierto", "abiertos", "abre", "cierran", "cierra", "cierre", "funcionan"}
+FRASES_HORARIOS = {"que dias", "cuando atienden", "a que hora"}
+
+PALABRAS_MENU = {"hola", "buenas", "hey", "holis", "inicio", "menu", "start", "empezar", "ole"}
+FRASES_MENU = {"buenos dias", "buenas tardes", "buenas noches", "buen dia", "que tal"}
+
+PALABRAS_AYUDA = {"ayuda", "persona", "humano", "asesor", "operador"}
 
 def normalizar_texto(texto):
-    """Pasa a minúscula, recorta espacios y quita acentos, para comparar palabras clave."""
+    """Pasa a minúscula, recorta espacios y quita acentos."""
     t = unicodedata.normalize("NFD", texto.strip().lower())
     return "".join(c for c in t if unicodedata.category(c) != "Mn")
+
+def detectar_categoria(msg_norm):
+    """Busca palabras/frases clave dentro del mensaje y devuelve la categoría,
+    o None si no reconoce ninguna.
+    Prioridad: emergencia > agendar > documentos > horarios > menú (saludo)."""
+    palabras = set(re.findall(r"\w+", msg_norm))
+    def hay(set_palabras, set_frases):
+        return bool(palabras & set_palabras) or any(f in msg_norm for f in set_frases)
+    if hay(PALABRAS_EMERGENCIA, FRASES_EMERGENCIA):
+        return "emergencia"
+    if hay(PALABRAS_AGENDAR, FRASES_AGENDAR):
+        return "agendar"
+    if hay(PALABRAS_DOCUMENTOS, FRASES_DOCUMENTOS):
+        return "documentos"
+    if hay(PALABRAS_HORARIOS, FRASES_HORARIOS):
+        return "horarios"
+    if hay(PALABRAS_MENU, FRASES_MENU):
+        return "menu"
+    return None
 
 def responder(mensaje, numero):
     msg = mensaje.strip().lower()
@@ -666,32 +713,38 @@ def responder(mensaje, numero):
             conversaciones[numero] = {**estado, "intentos_doc_post": intentos}
             return f"Por favor respondé *1*, *2* o *3*. — Te quedan *{3 - intentos} intentos*."
 
-    if msg_norm in PALABRAS_MENU:
+    # Número exacto del menú (1-4), o detección de intención por palabras clave.
+    if msg in ["1", "2", "3", "4"]:
+        categoria = {"1": "horarios", "2": "agendar", "3": "documentos", "4": "emergencia"}[msg]
+    else:
+        categoria = detectar_categoria(msg_norm)
+
+    if categoria == "menu":
         return MENU
-    elif msg_norm in PALABRAS_HORARIOS:
+    elif categoria == "horarios":
         loguear_consulta(numero, "Horarios de atención")
         return f"🕐 ¡Buena pregunta! Estamos disponibles de *{HORARIO_ATENCION}* en nuestras dos sucursales 📍"
-    elif msg_norm in PALABRAS_AGENDAR:
+    elif categoria == "agendar":
         loguear_consulta(numero, "Agendar una consulta")
         conversaciones[numero] = {"paso": "cita_sucursal"}
         return ("¡Genial, vamos a planear algo juntos! 🗓️✨\n\n"
                 "Primero, ¿en qué sucursal preferís atenderte?\n\n"
                 "1️⃣ 📍 Monte Buey\n"
                 "2️⃣ 📍 Justiniano Posse")
-    elif msg_norm in PALABRAS_DOCUMENTOS:
+    elif categoria == "documentos":
         loguear_consulta(numero, "Enviar documentación")
         conversaciones[numero] = {"paso": "doc_menu"}
         return ("📁 ¿Qué querés hacer?\n\n"
                 "1️⃣ Subir documentación\n"
                 "2️⃣ Ver mis documentos guardados")
-    elif msg_norm in PALABRAS_EMERGENCIA:
+    elif categoria == "emergencia":
         loguear_consulta(numero, "Emergencia durante un viaje")
         return (f"🚨 *¿Estás en una emergencia durante tu viaje?*\n\n"
                 f"Contactá ahora a nuestra línea de guardia:\n"
                 f"📞 *{NUMERO_GUARDIA}*\n\n"
                 f"¡Estamos para vos las 24hs! 💪")
     else:
-        return MENSAJE_NO_ENTENDIDO
+        return MENSAJE_DERIVAR
 
 @app.route("/webhook", methods=["GET"])
 def verificar_webhook():

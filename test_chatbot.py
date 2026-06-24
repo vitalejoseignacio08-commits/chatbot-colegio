@@ -74,8 +74,8 @@ def test_variantes_de_saludo_muestran_menu():
         assert chatbot.responder(saludo, NUMERO) == chatbot.MENU
 
 
-def test_mensaje_no_reconocido_muestra_no_entendido():
-    assert chatbot.responder("asdkjaslkdj", NUMERO) == chatbot.MENSAJE_NO_ENTENDIDO
+def test_mensaje_no_reconocido_deriva_a_consultas():
+    assert chatbot.responder("asdkjaslkdj", NUMERO) == chatbot.MENSAJE_DERIVAR
 
 
 def test_opcion_horarios():
@@ -135,9 +135,59 @@ def test_ayuda_funciona_a_mitad_de_un_flujo():
     assert respuesta == chatbot.MENSAJE_AYUDA
 
 
-def test_numero_invalido_del_menu_muestra_no_entendido():
+def test_numero_invalido_del_menu_deriva_a_consultas():
     # El "5" ya no es una opción válida (el menú ahora es 1-4).
-    assert chatbot.responder("5", NUMERO) == chatbot.MENSAJE_NO_ENTENDIDO
+    assert chatbot.responder("5", NUMERO) == chatbot.MENSAJE_DERIVAR
+
+
+# ============================================================
+# DETECCIÓN DE INTENCIÓN POR PALABRAS DENTRO DEL MENSAJE
+# ============================================================
+
+def test_mensaje_largo_con_intencion_va_a_agendar():
+    # El caso real: un mensaje natural y largo con un saludo + la intención.
+    msg = "hola buenas noches, quiero hacer una consulta para un viaje a europa"
+    respuesta = chatbot.responder(msg, NUMERO)
+    assert "sucursal" in respuesta.lower()
+    assert chatbot.conversaciones[NUMERO]["paso"] == "cita_sucursal"
+
+
+def test_intencion_horarios_en_oracion():
+    respuesta = chatbot.responder("hola, a qué hora abren?", NUMERO)
+    assert "10:00 a 20:00" in respuesta
+
+
+def test_intencion_documentos_en_oracion():
+    respuesta = chatbot.responder("necesito enviar mi pasaporte", NUMERO)
+    assert chatbot.conversaciones[NUMERO]["paso"] == "doc_menu"
+
+
+def test_frase_emergencia_perder_vuelo_va_a_emergencia():
+    respuesta = chatbot.responder("ayuda perdí el vuelo en madrid", NUMERO)
+    assert chatbot.NUMERO_GUARDIA in respuesta
+
+
+def test_palabra_problema_va_a_emergencia():
+    respuesta = chatbot.responder("tengo un problema con mi reserva", NUMERO)
+    assert chatbot.NUMERO_GUARDIA in respuesta
+
+
+def test_emergencia_tiene_prioridad_sobre_agendar():
+    # Menciona "vuelo" (agendar) pero también "perdí" (emergencia): gana emergencia.
+    respuesta = chatbot.responder("perdí mi vuelo, era un viaje a brasil", NUMERO)
+    assert chatbot.NUMERO_GUARDIA in respuesta
+
+
+def test_saludo_largo_sin_intencion_muestra_menu():
+    respuesta = chatbot.responder("hola buenas, cómo andás?", NUMERO)
+    assert respuesta == chatbot.MENU
+
+
+def test_fallback_deriva_a_ambas_sucursales():
+    respuesta = chatbot.responder("xyz no se que escribir", NUMERO)
+    assert respuesta == chatbot.MENSAJE_DERIVAR
+    assert "Monte Buey" in respuesta
+    assert "Justiniano Posse" in respuesta
 
 
 # ============================================================
